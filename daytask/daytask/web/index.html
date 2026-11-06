@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#2C64A8">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="DayTask">
+  <title>DayTask</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icon.svg">
+  <link rel="stylesheet" href="styles.css">
+  <!-- Bundled so the app works offline: @supabase/supabase-js 2.45.4, sortablejs 1.15.2 -->
+  <script src="vendor/supabase.js"></script>
+  <script src="vendor/Sortable.min.js"></script>
+</head>
+<body>
+  <div id="signin" class="signin" hidden>
+    <form id="signin-form">
+      <h1>DayTask</h1>
+      <p id="signin-msg" class="hint">Sign in with the account you created in Supabase.</p>
+      <label>Email<input name="email" type="email" autocomplete="username" required></label>
+      <label>Password<input name="password" type="password" autocomplete="current-password" required></label>
+      <button type="submit" class="primary">Sign in</button>
+    </form>
+  </div>
+
+  <div id="app" hidden>
+    <header id="band" class="band"></header>
+    <nav class="tabs" aria-label="Views">
+      <button data-view="today" aria-current="page">Tasks</button>
+      <button data-view="calendar">Calendar</button>
+      <button data-view="import">Import</button>
+      <button data-view="settings">Settings</button>
+    </nav>
+
+    <form id="add" class="add" autocomplete="off">
+      <div class="add-main">
+        <input name="title" placeholder="Add a task" aria-label="New task" maxlength="500" required>
+        <input name="status" class="add-status" placeholder="Status" aria-label="Status (optional)" list="status-suggestions" maxlength="60" autocomplete="off" hidden>
+        <button type="submit" class="primary">Add</button>
+      </div>
+      <div class="add-opts">
+        <div class="seg" role="group" aria-label="List">
+          <button type="button" data-ctx="work">Work</button>
+          <button type="button" data-ctx="home">Home</button>
+        </div>
+        <button type="button" class="toggle" data-prio aria-pressed="false">High priority</button>
+        <button type="button" class="toggle daily-toggle" data-daily aria-pressed="false" title="Repeats every day: goes in the Daily section">Daily</button>
+        <button type="button" class="toggle status-toggle" data-status-toggle aria-pressed="false" title="Show a status beside the name">Status</button>
+        <label class="date-pick start-pick" hidden>Starts <input type="date" name="start" aria-label="Start date: the day it joins your Tasks list"></label>
+        <label class="date-pick due-pick">Due <input type="date" name="due" aria-label="Due date (optional)"></label>
+        <button type="button" class="link" data-toggle-note>Add note</button>
+      </div>
+      <textarea name="note" rows="2" placeholder="Context for this task" hidden></textarea>
+    </form>
+
+    <main id="view"></main>
+  </div>
+
+  <dialog id="nest-dialog" aria-labelledby="nest-title">
+    <form method="dialog">
+      <h2 id="nest-title">Add as a subtask?</h2>
+      <p id="nest-text"></p>
+      <ul id="nest-details"></ul>
+      <div class="dialog-buttons">
+        <button value="cancel" class="plain">Cancel</button>
+        <button value="add" class="primary">Add as subtask</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="ext-dialog" aria-labelledby="ext-title">
+    <form method="dialog">
+      <h2 id="ext-title">Still working?</h2>
+      <p id="ext-text"></p>
+      <div class="dialog-buttons stack">
+        <button value="home" class="plain">Switch to Home tasks</button>
+        <button value="keep" class="primary">Keep working</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="workback-dialog" aria-labelledby="workback-title" aria-describedby="workback-text">
+    <form method="dialog">
+      <div class="dialog-head">
+        <h2 id="workback-title">Back to work?</h2>
+        <button value="cancel" class="dialog-x" aria-label="Close" title="Close">×</button>
+      </div>
+      <p id="workback-text"></p>
+      <p id="workback-question" class="dialog-question"></p>
+      <div class="dialog-actions">
+        <button value="work" class="primary">Move Work to the top</button>
+        <button value="home" class="plain">Stay on Home</button>
+        <button value="cancel" class="link" id="workback-cancel">Cancel, I entered the wrong time</button>
+      </div>
+    </form>
+  </dialog>
+
+  <datalist id="status-suggestions"></datalist>
+  <div id="toast" role="status" aria-live="polite"></div>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
