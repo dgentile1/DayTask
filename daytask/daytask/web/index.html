@@ -102,6 +102,22 @@
     </form>
   </dialog>
 
+  <dialog id="timer-dialog" aria-labelledby="timer-title" aria-describedby="timer-text">
+    <form method="dialog">
+      <div class="dialog-head">
+        <h2 id="timer-title"></h2>
+        <button value="cancel" class="dialog-x" aria-label="Cancel" title="Cancel">×</button>
+      </div>
+      <p id="timer-text"></p>
+      <ul id="timer-running" class="timer-running"></ul>
+      <div class="dialog-actions">
+        <button value="go" class="primary" id="timer-go"></button>
+        <button value="stopall" class="plain" id="timer-stopall" hidden>Stop all</button>
+        <button value="cancel" class="plain">Cancel</button>
+      </div>
+    </form>
+  </dialog>
+
   <datalist id="status-suggestions"></datalist>
   <div id="toast" role="status" aria-live="polite"></div>
   <script type="module" src="js/app.js"></script>

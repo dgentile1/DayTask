@@ -306,18 +306,22 @@ ul.subtasks { list-style: none; margin: -4px 0 0; padding: 0 12px 8px 66px; disp
 
 /* Drop a task on another task */
 .task.nest-target { background: var(--soon-bg); outline: 2px dashed var(--work-text); outline-offset: -3px; }
+.task { position: relative; }
+/* Floats over the row so it never changes the row's size (a growing row would move the
+   "middle" drop zone under the pointer and turn a reorder into "Add as subtask"). */
 .task.nest-target .row::after {
-  content: 'Add as subtask'; align-self: center; flex: none; font-size: .78rem; font-weight: 700;
-  color: var(--paper); background: var(--ink); border-radius: 999px; padding: 2px 9px;
+  content: 'Add as subtask'; position: absolute; right: 10px; top: 8px; pointer-events: none;
+  font-size: .78rem; font-weight: 700; color: var(--paper); background: var(--ink); border-radius: 999px; padding: 2px 9px;
+  box-shadow: 0 0 0 3px var(--soon-bg);
 }
 .meta .next-sub { font-weight: 400; }
-#nest-dialog, #ext-dialog, #workback-dialog {
+#nest-dialog, #ext-dialog, #workback-dialog, #timer-dialog {
   border: 1px solid var(--line); border-radius: 10px; background: var(--surface); color: var(--ink);
   padding: 18px; width: min(360px, calc(100vw - 32px)); box-shadow: 0 10px 40px rgba(0,0,0,.25);
 }
-#nest-dialog::backdrop, #ext-dialog::backdrop, #workback-dialog::backdrop { background: rgba(10, 14, 18, .45); }
-#nest-dialog h2, #ext-dialog h2, #workback-dialog h2 { margin: 0 0 8px; font-size: 1.1rem; }
-#nest-dialog p, #ext-dialog p, #workback-dialog p { margin: 0 0 8px; overflow-wrap: anywhere; }
+#nest-dialog::backdrop, #ext-dialog::backdrop, #workback-dialog::backdrop, #timer-dialog::backdrop { background: rgba(10, 14, 18, .45); }
+#nest-dialog h2, #ext-dialog h2, #workback-dialog h2, #timer-dialog h2 { margin: 0 0 8px; font-size: 1.1rem; }
+#nest-dialog p, #ext-dialog p, #workback-dialog p, #timer-dialog p { margin: 0 0 8px; overflow-wrap: anywhere; }
 #nest-dialog ul { margin: 0 0 12px; padding-left: 18px; color: var(--muted); font-size: .9rem; display: grid; gap: 3px; }
 .dialog-buttons { display: flex; justify-content: flex-end; gap: 8px; }
 
@@ -479,3 +483,14 @@ html { scroll-padding-top: calc(env(safe-area-inset-top, 0px) + var(--topbar-h, 
 .classify button[data-val="app"] { color: var(--app-text); border-color: var(--app-text); }
 .dots .ap { background: var(--app); }
 .ctx-dot.ctx-app { background: var(--app); }
+
+/* Several timers */
+.timer-running { list-style: none; margin: 0 0 14px; padding: 0; display: grid; gap: 6px; }
+.timer-running label, .timer-running .tr-stop {
+  display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--paper);
+}
+.timer-running input { width: 18px; height: 18px; flex: none; accent-color: var(--danger); }
+.timer-running .tr-name { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.timer-running .tr-time { flex: none; font-variant-numeric: tabular-nums; color: var(--danger); font-weight: 700; }
+.timer-running .tr-stop button { flex: none; padding: 4px 10px; }
+.band .band-timer .bt-more { background: var(--danger); color: #fff; border-radius: 999px; padding: 0 6px; font-size: .72rem; }

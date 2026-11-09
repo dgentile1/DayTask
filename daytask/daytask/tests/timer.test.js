@@ -119,3 +119,22 @@ test('subtasks have their own timers, separate from the task', async () => {
   m = applyChanges(m, stopTimer(m, cst('2026-11-03', '00:30'), TZ, newId));
   assert.deepEqual(m.map((x) => [x.day, x.subtaskId]).sort(), [['2026-11-02', 's1'], ['2026-11-03', 's1']]);
 });
+
+test('several timers can run at once; choose which to stop', async () => {
+  const { runningEntries, timeKey } = await import('../web/js/core/timer.js');
+  const C = { id: 'C', title: 'Call vendor', context: 'work' };
+  let e = applyChanges([], startTimer([], A, cst('2026-11-03', '09:00'), TZ, newId));
+  e = applyChanges(e, startTimer(e, B, cst('2026-11-03', '09:10'), TZ, newId, { stop: 'none' })); // alongside
+  assert.deepEqual(runningEntries(e).map((x) => x.taskId), ['B', 'A']);                          // newest first
+  e = applyChanges(e, startTimer(e, C, cst('2026-11-03', '09:20'), TZ, newId, { stop: [timeKey('A')] })); // stop just A
+  assert.deepEqual(runningEntries(e).map((x) => x.taskId).sort(), ['B', 'C']);
+  const now = cst('2026-11-03', '09:30');
+  assert.deepEqual([taskDaySeconds(e, 'A', '2026-11-03', now, TZ), taskDaySeconds(e, 'B', '2026-11-03', now, TZ), taskDaySeconds(e, 'C', '2026-11-03', now, TZ)],
+    [1200, 1200, 600]); // overlapping time counts for each task
+  e = applyChanges(e, stopTimer(e, now, TZ, newId, timeKey('C')));       // stop one
+  assert.deepEqual(runningEntries(e).map((x) => x.taskId), ['B']);
+  e = applyChanges(e, startTimer(e, B, now, TZ, newId, { stop: 'none' })); // already running: no change
+  assert.equal(runningEntries(e).length, 1);
+  e = applyChanges(e, stopTimer(e, cst('2026-11-03', '10:00'), TZ, newId)); // all
+  assert.equal(runningEntries(e).length, 0);
+});

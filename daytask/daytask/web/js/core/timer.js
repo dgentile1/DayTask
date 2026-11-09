@@ -80,40 +80,51 @@ export function splitByDay(startIso, endIso, tz) {
   return out;
 }
 
-export const runningEntry = (entries) => entries.find((e) => e.kind === 'timer' && !e.endedAt) || null;
+/** Every timer running now (several can run at once), newest first. */
+export const runningEntries = (entries) => entries.filter((e) => e.kind === 'timer' && !e.endedAt)
+  .sort((a, b) => String(b.startedAt).localeCompare(String(a.startedAt)));
+export const runningEntry = (entries) => runningEntries(entries)[0] || null;
 
 /** What a timer belongs to: a task ('taskId|') or one of its subtasks ('taskId|subId'). */
 export const timeKey = (taskId, subtaskId = null) => `${taskId}|${subtaskId || ''}`;
 export const entryKey = (e) => timeKey(e.taskId, e.subtaskId);
 
-/** Changes that stop the running timer at `now`: end it, and add one entry per extra day if it ran past midnight. */
-export function stopTimer(entries, now, tz, newId) {
-  const changes = { inserts: [], updates: [] };
-  const r = runningEntry(entries);
-  if (!r) return changes;
+/** Changes that stop one running timer at `now`, adding one entry per extra day if it ran past midnight. */
+function stopOne(r, now, tz, changes) {
   const end = now < new Date(r.startedAt) ? new Date(r.startedAt) : now;
   const pieces = splitByDay(r.startedAt, end.toISOString(), tz);
   if (!pieces.length) {
     changes.updates.push({ id: r.id, patch: { endedAt: end.toISOString(), seconds: 0 } });
-    return changes;
+    return;
   }
   pieces.forEach((p, i) => {
     const fields = { day: p.day, endedAt: p.end.toISOString(), seconds: p.seconds };
     if (i === 0) changes.updates.push({ id: r.id, patch: fields });
     else changes.inserts.push({ id: uuidFrom(`${r.id}:${p.day}`), taskId: r.taskId, subtaskId: r.subtaskId ?? null, title: r.title, context: r.context, kind: 'timer', startedAt: p.start.toISOString(), ...fields });
   });
+}
+
+/**
+ * Changes that stop running timers at `now`.
+ * which: 'all' (default), a single key (timeKey), or an array of keys.
+ */
+export function stopTimer(entries, now, tz, newId, which = 'all') {
+  const changes = { inserts: [], updates: [] };
+  const keys = which === 'all' ? null : new Set(Array.isArray(which) ? which : [which]);
+  for (const r of runningEntries(entries)) if (!keys || keys.has(entryKey(r))) stopOne(r, now, tz, changes);
   return changes;
 }
 
 /**
- * Changes that start a timer at `now`, stopping whichever timer is running first.
- * `task` is { id, title, context, subtaskId? }: with subtaskId it's that subtask's own timer.
+ * Changes that start a timer at `now`. `task` is { id, title, context, subtaskId? }: with
+ * subtaskId it's that subtask's own timer. stop: which running timers to stop first:
+ * 'all' (default), 'none' (run alongside them), or an array of keys.
  */
-export function startTimer(entries, task, now, tz, newId) {
-  const r = runningEntry(entries);
+export function startTimer(entries, task, now, tz, newId, { stop = 'all' } = {}) {
   const subtaskId = task.subtaskId ?? null;
-  if (r && entryKey(r) === timeKey(task.id, subtaskId)) return { inserts: [], updates: [] };
-  const changes = stopTimer(entries, now, tz, newId);
+  const key = timeKey(task.id, subtaskId);
+  if (runningEntries(entries).some((r) => entryKey(r) === key)) return { inserts: [], updates: [] };
+  const changes = stop === 'none' ? { inserts: [], updates: [] } : stopTimer(entries, now, tz, newId, stop);
   changes.inserts.push({
     id: newId(), taskId: task.id, subtaskId, title: task.title, context: task.context ?? null, kind: 'timer',
     day: localParts(now, tz).date, startedAt: now.toISOString(), endedAt: null, seconds: 0,

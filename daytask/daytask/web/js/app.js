@@ -13,7 +13,7 @@ import { host } from './host.js';
 import { applyTheme, applyCachedTheme, activeTheme, onThemeChange } from './theme.js';
 import { isDaily, dailyDoneToday, dailySubtasks, defaultRepeat } from './core/daily.js';
 import {
-  startTimer, stopTimer, applyChanges, runningEntry, dayTotals, taskDaySeconds, setDayTotal, autoStopAt, timeKey, entryKey,
+  startTimer, stopTimer, applyChanges, runningEntry, runningEntries, dayTotals, taskDaySeconds, setDayTotal, autoStopAt, timeKey, entryKey,
   formatDuration, parseDuration, weekDays,
 } from './core/timer.js';
 import { COLOR_KEYS, COLOR_LABELS, DEFAULT_COLORS } from './core/colors.js';
@@ -206,7 +206,7 @@ async function patchTask(id, patch) {
   if (!t) return;
   if (patch.context === 'app' && t.context !== 'app') {
     if (t.repeat) patch.repeat = null;                    // App tasks don't repeat
-    if (runningTaskId() === id) await stopRunningTimer(); // ...or have timers
+    await stopTimerIfFor(id);                             // ...or have timers
   }
   if ('context' in patch && patch.context !== t.context) {
     // Moving to the other list: place it there by due date, like a new task.
@@ -280,7 +280,10 @@ async function commitTime(changes) {
   for (const u of changes.updates) await db.updateEntry(u.id, u.patch);
   for (const i of changes.inserts) await db.insertEntry(i);
 }
-const runningKey = () => { const r = runningEntry(state.entries); return r ? entryKey(r) : null; };
+// Several timers can run at once.
+const runningKeys = () => new Set(runningEntries(state.entries).map(entryKey));
+const isRunning = (key) => runningKeys().has(key);
+const runningKey = () => { const r = runningEntry(state.entries); return r ? entryKey(r) : null; }; // newest
 const runningTaskId = () => runningEntry(state.entries)?.taskId ?? null;
 /** What a timer is for: the task itself, or (with subId) one of its subtasks. */
 function timerTarget(taskId, subId = null) {
@@ -290,32 +293,95 @@ function timerTarget(taskId, subId = null) {
   if (subId && !st) return null;
   return { id: t.id, subtaskId: subId, title: st ? st.title : t.title, context: t.context };
 }
-async function startTimerFor(taskId, subId = null) {
+/** stop: 'none' (run alongside), 'all', or the keys of the running timers to stop first. */
+async function startTimerFor(taskId, subId = null, stop = 'none') {
   const target = timerTarget(taskId, subId);
-  if (target) await commitTime(startTimer(state.entries, target, new Date(), tz(), entryId));
+  if (target) await commitTime(startTimer(state.entries, target, new Date(), tz(), entryId, { stop }));
+}
+/** ▶ pressed: start at once if nothing's running; otherwise ask which running timers to stop. */
+function requestStart(taskId, subId = null) {
+  const running = runningEntries(state.entries);
+  if (!running.length) { guarded(() => startTimerFor(taskId, subId, 'none')); return; }
+  const target = timerTarget(taskId, subId);
+  if (!target) return;
+  const dlg = $('#timer-dialog');
+  $('#timer-title').textContent = `Start timer for ${target.title}?`;
+  $('#timer-text').textContent = running.length === 1
+    ? 'This timer is running. Keep it ticked to stop it, or untick it to keep it running alongside:'
+    : 'These timers are running. Tick the ones to stop; unticked ones keep running alongside:';
+  $('#timer-running').innerHTML = running.map((r) => `
+    <li><label><input type="checkbox" data-stop-key="${esc(entryKey(r))}" checked>
+      <span class="tr-name">Stop ${esc(timerLabel(r))}</span>
+      <span class="tr-time" data-live-time="${esc(entryKey(r))}">${esc(formatDuration(todaySeconds(r.taskId, r.subtaskId), { seconds: true }))}</span></label></li>`).join('');
+  const go = $('#timer-go');
+  const label = () => {
+    const n = dlg.querySelectorAll('[data-stop-key]:checked').length;
+    go.textContent = n ? `Stop ${n} and start` : 'Start alongside';
+  };
+  label();
+  dlg.onchange = label;
+  go.hidden = false; go.value = 'go';
+  $('#timer-stopall').hidden = true;
+  dlg.returnValue = '';
+  dlg.onclose = () => {
+    if (dlg.returnValue !== 'go') return;
+    const stop = [...dlg.querySelectorAll('[data-stop-key]:checked')].map((x) => x.dataset.stopKey);
+    guarded(() => startTimerFor(taskId, subId, stop.length ? stop : 'none'));
+  };
+  dlg.showModal();
+  go.focus();
+}
+/** Header pressed with several timers running: pick which to stop. */
+function showRunningTimers() {
+  const running = runningEntries(state.entries);
+  if (running.length <= 1) { guarded(() => stopRunningTimer()); return; }
+  const dlg = $('#timer-dialog');
+  $('#timer-title').textContent = 'Running timers';
+  $('#timer-text').textContent = 'Stop any of these:';
+  $('#timer-running').innerHTML = running.map((r) => `
+    <li class="tr-stop"><span class="tr-name">${esc(timerLabel(r))}</span>
+      <span class="tr-time" data-live-time="${esc(entryKey(r))}">${esc(formatDuration(todaySeconds(r.taskId, r.subtaskId), { seconds: true }))}</span>
+      <button class="plain" value="stop:${esc(entryKey(r))}">Stop</button></li>`).join('');
+  dlg.onchange = null;
+  $('#timer-go').hidden = true;
+  $('#timer-stopall').hidden = false;
+  dlg.returnValue = '';
+  dlg.onclose = () => {
+    const v = dlg.returnValue || '';
+    if (v === 'stopall') guarded(() => stopRunningTimer());
+    else if (v.startsWith('stop:')) guarded(() => stopRunningTimer(v.slice(5)));
+  };
+  dlg.showModal();
 }
 /**
  * A timer still running when its work day ends is stopped at that moment (also when the app
- * was closed then: it's stopped at the end time, not when the app is next opened).
+ * was closed then: it's stopped at the end time, not when the app is next opened). Each
+ * running timer is checked on its own.
  */
 function maybeAutoStopTimer() {
-  const r = runningEntry(state.entries);
-  if (!r || !state.sched) return;
-  const at = autoStopAt(r, state.settings, tz());
-  if (!at || new Date() < at) return;
-  const title = timerLabel(r);
-  guarded(async () => {
-    await commitTime(stopTimer(state.entries, at, tz(), entryId));
-    const when = at.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', timeZone: tz() });
-    toast(`Timer stopped at ${when}, the end of work hours: ${title}`);
-  });
+  if (!state.sched) return;
+  const now = new Date();
+  for (const r of runningEntries(state.entries)) {
+    const at = autoStopAt(r, state.settings, tz());
+    if (!at || now < at) continue;
+    const title = timerLabel(r);
+    guarded(async () => {
+      await commitTime(stopTimer(state.entries, at, tz(), entryId, entryKey(r)));
+      const when = at.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', timeZone: tz() });
+      toast(`Timer stopped at ${when}, the end of work hours: ${title}`);
+    });
+  }
 }
 
-async function stopRunningTimer() { await commitTime(stopTimer(state.entries, new Date(), tz(), entryId)); }
+/** Stop one timer (by key) or, with no key, all of them. */
+async function stopRunningTimer(key = 'all') { await commitTime(stopTimer(state.entries, new Date(), tz(), entryId, key)); }
 /** Checking off, deleting or nesting a task stops its timer and its subtasks' timers. */
-async function stopTimerIfFor(id) { if (runningTaskId() === id) await stopRunningTimer(); }
+async function stopTimerIfFor(id) {
+  const keys = runningEntries(state.entries).filter((r) => r.taskId === id).map(entryKey);
+  if (keys.length) await stopRunningTimer(keys);
+}
 /** Checking off or deleting a subtask stops its timer. */
-async function stopSubTimerIfFor(id, subId) { if (runningKey() === timeKey(id, subId)) await stopRunningTimer(); }
+async function stopSubTimerIfFor(id, subId) { const k = timeKey(id, subId); if (isRunning(k)) await stopRunningTimer(k); }
 const todaySeconds = (id, subId = null) => taskDaySeconds(state.entries, id, state.sched.today, new Date(), tz(), subId);
 
 /** "Subtask (Task)" for a subtask's timer, the task name for a task's. */
@@ -328,7 +394,7 @@ function timerLabel(e) {
 
 function timerButton(t, st = null) {
   const key = timeKey(t.id, st?.id);
-  const running = runningKey() === key;
+  const running = isRunning(key);
   const secs = todaySeconds(t.id, st?.id);
   const time = running ? formatDuration(secs, { seconds: true }) : secs ? formatDuration(secs) : '';
   const name = st ? st.title : t.title;
@@ -337,20 +403,23 @@ function timerButton(t, st = null) {
 }
 
 function bandTimer() {
-  const r = runningEntry(state.entries);
+  const all = runningEntries(state.entries);
+  const r = all[0];
   if (!r) return '';
   const title = timerLabel(r);
-  return `<button class="band-timer" data-act="timer-stop" title="Stop timer: ${esc(title)}">■ <span class="bt-name">${esc(title)}</span>
-    <span class="bt-time" data-live-total>${esc(formatDuration(todaySeconds(r.taskId, r.subtaskId), { seconds: true }))}</span></button>`;
+  const more = all.length - 1;
+  return `<button class="band-timer" data-act="timer-stop" title="${more ? `${all.length} timers running` : `Stop timer: ${esc(title)}`}">■ <span class="bt-name">${esc(title)}</span>
+    <span class="bt-time" data-live-time="${esc(entryKey(r))}">${esc(formatDuration(todaySeconds(r.taskId, r.subtaskId), { seconds: true }))}</span>${more ? `<span class="bt-more">+${more}</span>` : ''}</button>`;
 }
 
-/** Once a second: update only the running clock's text (no redraws). */
+/** Once a second: update only the running clocks' text (no redraws). */
 function tickTimer() {
-  const r = runningEntry(state.entries);
-  if (!r || !state.sched) return;
-  const key = entryKey(r);
-  const txt = formatDuration(todaySeconds(r.taskId, r.subtaskId), { seconds: true });
-  for (const el of document.querySelectorAll(`[data-timer-key="${CSS.escape(key)}"] .tt, #band [data-live-total], [data-live-time="${CSS.escape(key)}"]`)) el.textContent = txt;
+  if (!state.sched) return;
+  for (const r of runningEntries(state.entries)) {
+    const key = entryKey(r);
+    const txt = formatDuration(todaySeconds(r.taskId, r.subtaskId), { seconds: true });
+    for (const el of document.querySelectorAll(`[data-timer-key="${CSS.escape(key)}"] .tt, [data-live-time="${CSS.escape(key)}"]`)) el.textContent = txt;
+  }
 }
 
 async function removeTask(id) {
@@ -848,12 +917,12 @@ function timeHtml() {
   const today = state.sched.today;
   const days = weekDays(state.timeWeek || today);
   const totals = dayTotals(state.entries, new Date(), tz());
-  const runKey = runningKey();
+  const runKeys = runningKeys();
   let weekTotal = 0;
   const perLine = {};
   const lineRow = (x, d, isSub) => {
     const editing = state.timeEdit && state.timeEdit.day === d && state.timeEdit.key === x.key;
-    const live = x.key === runKey && d === today;
+    const live = runKeys.has(x.key) && d === today;
     return `<li class="time-row${isSub ? ' time-sub' : ''}${live ? ' running' : ''}">
       <span class="time-title">${isSub ? '<span class="sub-mark" aria-hidden="true">›</span>' : `<span class="ctx-dot ctx-${esc(x.context || 'none')}"></span>`}${esc(x.title)}</span>
       ${editing ? `<span class="time-edit">
@@ -864,7 +933,7 @@ function timeHtml() {
   };
   const dayBlocks = days.map((d) => {
     const lines = Object.values(totals[d] || {})
-      .filter((x) => x.seconds > 0 || (x.key === runKey && d === today))
+      .filter((x) => x.seconds > 0 || (runKeys.has(x.key) && d === today))
       .map((x) => ({ ...x, ...timeLineInfo(x) }));
     const dayTotal = lines.reduce((n, x) => n + x.seconds, 0); // task and subtask time: all of it
     weekTotal += dayTotal;
@@ -1310,10 +1379,12 @@ function wireView() {
       }
       case 'timer': {
         const subId = btn.dataset.subTimer || null;
-        guarded(() => (runningKey() === timeKey(id, subId) ? stopRunningTimer() : startTimerFor(id, subId)));
+        const key = timeKey(id, subId);
+        if (isRunning(key)) guarded(() => stopRunningTimer(key)); // ■ stops just this one
+        else requestStart(id, subId);
         break;
       }
-      case 'timer-stop': guarded(stopRunningTimer); break;
+      case 'timer-stop': showRunningTimers(); break;
       case 'time-prev': case 'time-next':
         state.timeWeek = addDays(weekDays(state.timeWeek || state.sched.today)[0], act === 'time-next' ? 7 : -7);
         state.timeEdit = null; state.timeAddDay = null; render(); break;

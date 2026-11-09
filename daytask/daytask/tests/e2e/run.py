@@ -1118,20 +1118,29 @@ with sync_playwright() as p:
     def ents(): return db['time_entries']
     def running(): return [e for e in ents() if e['kind'] == 'timer' and e['ended_at'] is None]
     def tick(iso): tm.clock.set_fixed_time(iso); tm.wait_for_timeout(1300)
+    def confirm_start(pg, keep=()):
+        pg.wait_for_selector('#timer-dialog[open]')
+        for name in keep:
+            pg.locator('#timer-running label', has_text=name).locator('input').uncheck()
+        pg.click('#timer-go'); pg.wait_for_timeout(400)
     A, B, C = 'Flash test units', 'Submit timesheet', 'Order relay'
     check(tbtn(A).inner_text().strip() == '▶' and tm.locator('#band .band-timer').count() == 0, 'each task has a start button; nothing running')
     tbtn(A).click(); tm.wait_for_timeout(400)
     check('running' in tbtn(A).get_attribute('class') and len(running()) == 1 and running()[0]['title'] == A
           and A in tm.inner_text('#band .band-timer'), 'start: button turns into stop, header shows the running task')
     tick('2026-11-03T16:30:00Z')
-    check(tbtn(A).locator('.tt').inner_text() == '0:30:00' and tm.locator('#band [data-live-total]').inner_text() == '0:30:00',
+    check(tbtn(A).locator('.tt').inner_text() == '0:30:00' and tm.locator('#band .bt-time').inner_text() == '0:30:00',
           'the clock counts up live on the task and in the header')
-    tbtn(B).click(); tm.wait_for_timeout(400)
+    tbtn(B).click(); tm.wait_for_timeout(300)
+    dlg = ' '.join(tm.inner_text('#timer-dialog').split())
+    check(f'Start timer for {B}?' in dlg and f'Stop {A}' in dlg and tm.locator('#timer-running input:checked').count() == 1
+          and tm.inner_text('#timer-go') == 'Stop 1 and start', f'a timer is running: popup lists it, ticked to stop: {dlg!r}')
+    confirm_start(tm)
     a1 = [e for e in ents() if e['title'] == A][0]
     check(a1['ended_at'] == '2026-11-03T16:30:00.000Z' and a1['seconds'] == 1800 and running()[0]['title'] == B,
           'starting another task stops the first one')
     tick('2026-11-03T16:45:00Z')
-    tbtn(A).click(); tm.wait_for_timeout(400)
+    tbtn(A).click(); confirm_start(tm)
     tick('2026-11-03T17:00:00Z')
     check(tbtn(A).locator('.tt').inner_text() == '0:45:00' and len([e for e in ents() if e['title'] == A]) == 2,
           'starting the first task again adds on to its time')
@@ -1181,11 +1190,11 @@ with sync_playwright() as p:
     tick('2026-11-03T17:25:00Z')
     check(sbtn('Gather receipts').locator('.tt').inner_text() == '0:20:00' and tbtn(B).locator('.tt').inner_text() == '0:15',
           'subtask time counts on the subtask, not the task')
-    tbtn(B).click(); tm.wait_for_timeout(400)
+    tbtn(B).click(); confirm_start(tm)
     g = [e for e in ents() if e.get('subtask_id') and e['title'] == 'Gather receipts'][0]
     check(g['seconds'] == 1200 and running()[0]['subtask_id'] in (None, '') and running()[0]['title'] == B, 'starting the task stops its subtask\'s timer')
     tick('2026-11-03T17:30:00Z')
-    sbtn('Fill form').click(); tm.wait_for_timeout(400)
+    sbtn('Fill form').click(); confirm_start(tm)
     check(running()[0]['title'] == 'Fill form' and tbtn(B).locator('.tt').inner_text() == '0:20', 'and starting a subtask stops the task\'s (task now 0:20)')
     tick('2026-11-03T17:40:00Z')
     tli(B).locator('ul.subtasks li', has_text='Fill form').locator('label').click(); tm.wait_for_timeout(500)
@@ -1212,6 +1221,38 @@ with sync_playwright() as p:
     tm.screenshot(path=os.path.join(HERE, 'time-subs.png'), full_page=True)
     tm.click('.tabs [data-view="today"]'); tm.wait_for_timeout(200)
     no_overflow(tm, 'task list with subtask timers')
+
+    # Several timers at once.
+    tm.click('.tabs [data-view="today"]'); tm.wait_for_timeout(200)
+    tm.clock.set_fixed_time('2026-11-03T18:00:00Z')  # 12:00
+    D, E = 'Send revised wiring diagram to Marcus', 'Quarterly backup check'
+    tbtn(D).click(); tm.wait_for_timeout(400)
+    check(tm.locator('#timer-dialog[open]').count() == 0 and len(running()) == 1, 'nothing running: ▶ just starts, no popup')
+    tbtn(E).click(); tm.wait_for_timeout(300)
+    tm.locator('#timer-running label', has_text=D).locator('input').uncheck()
+    check(tm.inner_text('#timer-go') == 'Start alongside', 'unticking: the button says Start alongside')
+    tm.locator('#timer-dialog').screenshot(path=os.path.join(HERE, 'timer-dialog.png'))
+    tm.click('#timer-go'); tm.wait_for_timeout(400)
+    check(sorted(e['title'] for e in running()) == sorted([D, E]) and 'running' in tbtn(D).get_attribute('class')
+          and 'running' in tbtn(E).get_attribute('class') and tm.locator('#band .bt-more').inner_text() == '+1',
+          'both run; each shows its own stop; header shows +1')
+    tick('2026-11-03T18:20:00Z')
+    check(tbtn(D).locator('.tt').inner_text() == '0:20:00' and tbtn(E).locator('.tt').inner_text() == '0:20:00', 'both clocks count')
+    tm.click('#band .band-timer'); tm.wait_for_timeout(300)
+    check(tm.locator('#timer-dialog[open]').count() == 1 and tm.locator('#timer-running .tr-stop').count() == 2, 'header with several running: lists them')
+    tm.locator('#timer-running .tr-stop', has_text=E).locator('button').click(); tm.wait_for_timeout(400)
+    check([e['title'] for e in running()] == [D], 'stop just one from the list')
+    tbtn(E).click(); tm.wait_for_timeout(300)
+    tm.locator('#timer-running label', has_text=D).locator('input').uncheck(); tm.click('#timer-go'); tm.wait_for_timeout(400)
+    tbtn(D).click(); tm.wait_for_timeout(400)  # its own ■
+    check([e['title'] for e in running()] == [E] and tm.locator('#timer-dialog[open]').count() == 0, "a running task's ■ stops only that timer")
+    tbtn(D).click(); tm.wait_for_timeout(300)
+    tm.click('#timer-dialog .dialog-x'); tm.wait_for_timeout(300)
+    check([e['title'] for e in running()] == [E], 'Cancel (×): nothing starts or stops')
+    tbtn(D).click(); tm.wait_for_timeout(300); tm.locator('#timer-running input').uncheck(); tm.click('#timer-go'); tm.wait_for_timeout(400)
+    tm.click('#band .band-timer'); tm.wait_for_timeout(300); tm.click('#timer-stopall'); tm.wait_for_timeout(400)
+    check(running() == [], 'Stop all from the header')
+    no_overflow(tm, 'several timers')
 
     # Stops by itself at the end of work hours (work hours reset to 8:00-5:00, button 15/15, as earlier tests changed them).
     db['user_settings'][0]['settings'].update(workEnd='17:00', extendPromptMinutes=15, extendVisibleMinutes=15, workExtension=None)
@@ -1290,19 +1331,22 @@ with sync_playwright() as p:
     ed.locator('[data-act="collapse"]').click(); ap.wait_for_timeout(200)
     check(ap.locator('ul[data-list="app"] li.task').first.locator('ul.subtasks li').count() == 1
           and ap.locator('ul[data-list="app"] li.task').first.locator('ul.subtasks .timer-btn').count() == 0, 'subtasks work; no subtask timers either')
-    # Drag within App: move the first one down onto the bottom edge of the second.
+    # Drag within App: up onto the top edge of a long-named task (its row must not grow while hovered).
     ap.wait_for_timeout(1000)  # let the sync refresh from adding the subtask land first
     ap.locator('ul[data-list="app"]').scroll_into_view_if_needed(); ap.wait_for_timeout(300)
-    src = ap.locator('ul[data-list="app"] > li', has_text='Add CSV export').locator('.drag')
-    dst = ap.locator('ul[data-list="app"] > li', has_text='Dark mode for print').locator('.row')
+    src = ap.locator('ul[data-list="app"] > li', has_text='Dark mode for print').locator('.drag')
+    dst = ap.locator('ul[data-list="app"] > li').first.locator('.row')
     a_, b_ = boxes(ap, src, dst)
-    y1 = b_['y'] + b_['height'] - 3
+    y1 = b_['y'] + 4
     ap.mouse.move(a_['x'] + 5, a_['y'] + 5); ap.mouse.down()
+    heights = []
     for i in range(40):
         ap.mouse.move(a_['x'] + 5, a_['y'] + 5 + (y1 - a_['y'] - 5) * (i + 1) / 40); ap.wait_for_timeout(15)
+        heights.append(ap.evaluate("document.querySelector('ul[data-list=\"app\"] > li .row').getBoundingClientRect().height"))
     ap.mouse.up(); ap.wait_for_timeout(600)
     if ap.locator('#nest-dialog[open]').count(): ap.click('#nest-dialog [value="cancel"]')
-    check(titles(ap, 'app')[0] == 'Dark mode for print', f'drag to reorder within App: {titles(ap, "app")}')
+    check(max(heights) - min(heights) < 1, f'a hovered task keeps its size while dragging over it: {min(heights)}..{max(heights)}')
+    check(titles(ap, 'app')[0] == 'Dark mode for print', f'drop on the top edge of a long-named task reorders: {titles(ap, "app")}')
     # Moving a daily task with a running timer to App: repeat off, timer stopped.
     d_li = ap.locator('ul[data-list="daily-work"] li.task', has_text='Review PRs')
     d_li.locator('.check').click(); ap.wait_for_timeout(400)  # earlier tests ticked it for today: untick so it has a timer
