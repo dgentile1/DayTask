@@ -1,7 +1,7 @@
 import * as store from './data/store.js'; // sign-in and live updates
 import * as sync from './data/sync.js';   // all task/settings reads and writes (offline-first)
 import {
-  normalizeSettings, scheduleState, buildTodayView, listSiblings, dueStatus, dueSoonItems, tasksForDay, dailyForDay, carryInfo, dragGroup, extendWorkDay, endWorkDayNow, extensionKeepsWorkOnTop, applyWorkHoursChange, workComesBack,
+  normalizeSettings, scheduleState, buildTodayView, listSiblings, dueStatus, dueSoonItems, tasksForDay, dailyForDay, carryInfo, dragGroup, isAppTask, contextLabel, extendWorkDay, endWorkDayNow, extensionKeepsWorkOnTop, applyWorkHoursChange, workComesBack,
   initialSortKey, sortKeyBetween, renormalizeKeys, bySortKey, resolveTimeZone,
 } from './core/schedule.js';
 import { addDays, monthGrid, formatDay, formatClock } from './core/dates.js';
@@ -12,6 +12,10 @@ import { runGranolaImport } from './integrations/granola/importer.js';
 import { host } from './host.js';
 import { applyTheme, applyCachedTheme, activeTheme, onThemeChange } from './theme.js';
 import { isDaily, dailyDoneToday, dailySubtasks, defaultRepeat } from './core/daily.js';
+import {
+  startTimer, stopTimer, applyChanges, runningEntry, dayTotals, taskDaySeconds, setDayTotal, autoStopAt, timeKey, entryKey,
+  formatDuration, parseDuration, weekDays,
+} from './core/timer.js';
 import { COLOR_KEYS, COLOR_LABELS, DEFAULT_COLORS } from './core/colors.js';
 
 // ---------------------------------------------------------------- state
@@ -22,6 +26,10 @@ const state = {
   view: 'today',
   expandedId: null,
   online: false,
+  entries: [],         // time entries (last 9 weeks + anything running)
+  timeWeek: null,      // Monday of the week shown on the Time tab
+  timeEdit: null,      // { day, taskId } being edited on the Time tab
+  timeAddDay: null,    // day with the "Add time" row open
   sync: sync.status(),
   topMost: false,
   cal: { year: 0, month0: 0, selected: null },
@@ -88,6 +96,7 @@ async function reload() {
   if (sync.isSending() || seq !== sync.writeSeq()) { scheduleReload(); return; }
   const settings = normalizeSettings(loaded.settings);
   const tasks = loaded.tasks;
+  state.entries = loaded.entries || [];
   const prevSettings = loadedOnce ? state.settings : null;
   loadedOnce = true;
   state.settings = settings;
@@ -107,6 +116,7 @@ async function applySchedule() {
   state.sched = scheduleState(new Date(), state.settings);
   if (prevMode && prevMode !== state.sched.mode && !state.addCtxTouched) state.addCtx = state.sched.mode;
   maybeSendDailyReminder();
+  maybeAutoStopTimer();
 }
 
 // ---------------------------------------------------------------- due-date reminders
@@ -194,6 +204,10 @@ async function addTask(fields) {
 async function patchTask(id, patch) {
   const t = find(id);
   if (!t) return;
+  if (patch.context === 'app' && t.context !== 'app') {
+    if (t.repeat) patch.repeat = null;                    // App tasks don't repeat
+    if (runningTaskId() === id) await stopRunningTimer(); // ...or have timers
+  }
   if ('context' in patch && patch.context !== t.context) {
     // Moving to the other list: place it there by due date, like a new task.
     patch.sortKey = initialSortKey({ ...t, ...patch }, listSiblings(state.tasks, patch.context, id));
@@ -223,6 +237,7 @@ async function changeSubtasks(id, fn, { refocus = null } = {}) {
 
 async function setDone(id, done) {
   const dt = find(id);
+  if (done) await stopTimerIfFor(id);
   if (isDaily(dt)) {
     await patchTask(id, { repeat: { ...dt.repeat, doneOn: done ? state.sched.today : null } });
     if (done) toast(`Done for today: ${dt.title}`, { label: 'Undo', run: () => guarded(() => setDone(id, false)) });
@@ -253,7 +268,93 @@ async function moveTask(id, aboveId, belowId) {
   await db.updateMany(updates);
 }
 
+// ---------------------------------------------------------------- time tracking
+const tz = () => resolveTimeZone(state.settings);
+const entryId = () => globalThis.crypto?.randomUUID?.() ?? `t${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
+
+/** Apply timer changes here at once and queue them for Supabase. */
+async function commitTime(changes) {
+  if (!changes.inserts.length && !changes.updates.length) return;
+  state.entries = applyChanges(state.entries, changes);
+  render();
+  for (const u of changes.updates) await db.updateEntry(u.id, u.patch);
+  for (const i of changes.inserts) await db.insertEntry(i);
+}
+const runningKey = () => { const r = runningEntry(state.entries); return r ? entryKey(r) : null; };
+const runningTaskId = () => runningEntry(state.entries)?.taskId ?? null;
+/** What a timer is for: the task itself, or (with subId) one of its subtasks. */
+function timerTarget(taskId, subId = null) {
+  const t = find(taskId);
+  if (!t) return null;
+  const st = subId ? (t.subtasks || []).find((x) => x.id === subId) : null;
+  if (subId && !st) return null;
+  return { id: t.id, subtaskId: subId, title: st ? st.title : t.title, context: t.context };
+}
+async function startTimerFor(taskId, subId = null) {
+  const target = timerTarget(taskId, subId);
+  if (target) await commitTime(startTimer(state.entries, target, new Date(), tz(), entryId));
+}
+/**
+ * A timer still running when its work day ends is stopped at that moment (also when the app
+ * was closed then: it's stopped at the end time, not when the app is next opened).
+ */
+function maybeAutoStopTimer() {
+  const r = runningEntry(state.entries);
+  if (!r || !state.sched) return;
+  const at = autoStopAt(r, state.settings, tz());
+  if (!at || new Date() < at) return;
+  const title = timerLabel(r);
+  guarded(async () => {
+    await commitTime(stopTimer(state.entries, at, tz(), entryId));
+    const when = at.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', timeZone: tz() });
+    toast(`Timer stopped at ${when}, the end of work hours: ${title}`);
+  });
+}
+
+async function stopRunningTimer() { await commitTime(stopTimer(state.entries, new Date(), tz(), entryId)); }
+/** Checking off, deleting or nesting a task stops its timer and its subtasks' timers. */
+async function stopTimerIfFor(id) { if (runningTaskId() === id) await stopRunningTimer(); }
+/** Checking off or deleting a subtask stops its timer. */
+async function stopSubTimerIfFor(id, subId) { if (runningKey() === timeKey(id, subId)) await stopRunningTimer(); }
+const todaySeconds = (id, subId = null) => taskDaySeconds(state.entries, id, state.sched.today, new Date(), tz(), subId);
+
+/** "Subtask (Task)" for a subtask's timer, the task name for a task's. */
+function timerLabel(e) {
+  const t = find(e.taskId);
+  if (!e.subtaskId) return t?.title ?? e.title;
+  const st = (t?.subtasks || []).find((x) => x.id === e.subtaskId);
+  return st?.title ?? e.title;
+}
+
+function timerButton(t, st = null) {
+  const key = timeKey(t.id, st?.id);
+  const running = runningKey() === key;
+  const secs = todaySeconds(t.id, st?.id);
+  const time = running ? formatDuration(secs, { seconds: true }) : secs ? formatDuration(secs) : '';
+  const name = st ? st.title : t.title;
+  return `<button class="timer-btn${st ? ' sub-timer' : ''}${running ? ' running' : ''}" data-act="timer"${st ? ` data-sub-timer="${esc(st.id)}"` : ''} data-timer-key="${esc(key)}"
+    aria-label="${running ? 'Stop timer' : 'Start timer'} for ${esc(name)}" title="${running ? 'Stop timer' : 'Start timer (stops any other)'}"><span class="ti" aria-hidden="true">${running ? '■' : '▶'}</span>${time ? `<span class="tt">${esc(time)}</span>` : ''}</button>`;
+}
+
+function bandTimer() {
+  const r = runningEntry(state.entries);
+  if (!r) return '';
+  const title = timerLabel(r);
+  return `<button class="band-timer" data-act="timer-stop" title="Stop timer: ${esc(title)}">■ <span class="bt-name">${esc(title)}</span>
+    <span class="bt-time" data-live-total>${esc(formatDuration(todaySeconds(r.taskId, r.subtaskId), { seconds: true }))}</span></button>`;
+}
+
+/** Once a second: update only the running clock's text (no redraws). */
+function tickTimer() {
+  const r = runningEntry(state.entries);
+  if (!r || !state.sched) return;
+  const key = entryKey(r);
+  const txt = formatDuration(todaySeconds(r.taskId, r.subtaskId), { seconds: true });
+  for (const el of document.querySelectorAll(`[data-timer-key="${CSS.escape(key)}"] .tt, #band [data-live-total], [data-live-time="${CSS.escape(key)}"]`)) el.textContent = txt;
+}
+
 async function removeTask(id) {
+  await stopTimerIfFor(id);
   const t = find(id);
   state.tasks = state.tasks.filter((x) => x.id !== id);
   state.expandedId = null;
@@ -277,7 +378,7 @@ function isTyping() {
     (a.tagName === 'INPUT' && ['text', 'search', 'email', 'number', 'time', 'tel', 'url', ''].includes(a.type))));
 }
 function render({ force = false } = {}) {
-  if (userId && state.sched) sync.snapshot(userId, state.tasks, state.settings);
+  if (userId && state.sched) sync.snapshot(userId, state.tasks, state.settings, state.entries);
   if (dragging || pointerHeld || (!force && isTyping())) { renderPending = true; return; }
   renderPending = false;
   renderBand();
@@ -285,6 +386,8 @@ function render({ force = false } = {}) {
   const sugg = document.getElementById('status-suggestions');
   if (sugg) sugg.innerHTML = statusSuggestions(state.tasks).map((x) => `<option value="${esc(x)}"></option>`).join('');
   if (!(state.view === 'settings' && settingsDirty && !force)) renderView();
+  const bar = document.querySelector('.topbar');
+  if (bar) document.documentElement.style.setProperty('--topbar-h', `${Math.round(bar.getBoundingClientRect().height)}px`);
   if (focusAfterRender) { document.querySelector(focusAfterRender)?.focus(); focusAfterRender = null; }
 }
 document.addEventListener('focusout', () => setTimeout(() => { if (renderPending) render(); }, 0));
@@ -337,12 +440,14 @@ function renderBand() {
   else modeText = `After hours. Work list is back ${s.workDate === addDays(s.today, 1) ? 'tomorrow' : formatDay(s.workDate, { weekday: 'long' })}`;
   const band = $('#band');
   band.className = `band ${s.mode}`;
+  document.body.classList.toggle('mode-home', s.mode === 'home');
   band.innerHTML = `
     <div class="day">${esc(formatDay(s.today, { weekday: 'long', month: 'short', day: 'numeric' }))}</div>
     <div class="mode">${esc(modeText)}</div>
     ${s.showExtend ? extendControls() : ''}
     <div class="sync-slot" aria-live="polite">${syncPill()}</div>
     <div class="tools">
+      ${bandTimer()}
       <span class="conn ${state.online && state.sync.online ? '' : 'off'}" title="${state.online && state.sync.online ? 'Live sync on' : 'Not connected'}"></span>
       ${host.available ? `<button class="pin" data-act="pin" aria-pressed="${state.topMost}" title="Ctrl+Shift+T">${state.topMost ? 'On top' : 'Keep on top'}</button>` : ''}
     </div>`;
@@ -378,6 +483,8 @@ function renderAddForm() {
   if (!state.addCtx) state.addCtx = state.sched.mode;
   for (const b of form.querySelectorAll('[data-ctx]')) b.setAttribute('aria-pressed', String(b.dataset.ctx === state.addCtx));
   form.querySelector('[data-prio]').setAttribute('aria-pressed', String(state.addPrio === 'high'));
+  if (state.addCtx === 'app') state.addDaily = false; // App tasks don't repeat
+  form.querySelector('[data-daily]').hidden = state.addCtx === 'app';
   form.querySelector('[data-daily]').setAttribute('aria-pressed', String(!!state.addDaily));
   form.querySelector('[data-status-toggle]').setAttribute('aria-pressed', String(!!state.addStatus));
   form.elements.status.hidden = !state.addStatus;
@@ -454,7 +561,7 @@ function taskRow(t, { drag = true, showDate = false, showContext = false, groupe
   if (daily && t.repeat.days === 'work') meta.push('<span class="daily-days">Work days</span>');
   if (!t.completedAt && t.startDate && t.startDate > state.sched.today) meta.push(`<span class="starts">Starts ${esc(formatDay(t.startDate))}</span>`);
   if (t.priority === 'high') meta.push('<span class="flag">High</span>');
-  if (showContext && t.context) meta.push(`<span class="ctx-${t.context}">${t.context === 'work' ? 'Work' : 'Home'}</span>`);
+  if (showContext && t.context) meta.push(`<span class="ctx-${t.context}">${contextLabel(t.context)}</span>`);
   if (t.completedAt) { if (showDate && t.dueDate) meta.push(`<span>Due ${esc(formatDay(t.dueDate))}</span>`); }
   else if (!grouped && !daily) { const d = dueLabel(t); if (d) meta.push(`<span class="${d.cls}">${esc(d.text)}</span>`); }
   if (!t.completedAt && !t.dueDate && state.expandedId !== t.id) {
@@ -480,6 +587,7 @@ function taskRow(t, { drag = true, showDate = false, showContext = false, groupe
         <span class="t">${esc(t.title)}</span>
         ${meta.length ? `<span class="meta">${meta.join('')}</span>` : ''}
       </button>
+      ${!t.completedAt && !dailyDone && !otherDay && !isAppTask(t) ? timerButton(t) : ''}
       ${t.status ? `<button class="status-pill" data-act="edit-status" title="Status: ${esc(t.status)} (tap to change)">${esc(t.status)}</button>` : ''}
       ${prog.total ? `<button class="sub-toggle${prog.allDone ? ' all-done' : ''}" data-act="toggle-subs"
         aria-expanded="${!isFolded}" aria-label="${prog.done} of ${prog.total} subtasks done, ${isFolded ? 'show' : 'hide'} subtasks"
@@ -489,12 +597,14 @@ function taskRow(t, { drag = true, showDate = false, showContext = false, groupe
       <li class="sub${s.done ? ' done' : ''}" data-sub="${esc(s.id)}">
         <label><input type="checkbox" class="sub-check" data-act="sub-done" ${s.done ? 'checked' : ''}${otherDay ? ' disabled' : ''}>
           <span class="sub-body"><span class="sub-title">${esc(s.title)}</span>${subMeta(s)}</span></label>
+        ${!s.done && !otherDay && !t.completedAt && !isAppTask(t) ? timerButton(t, s) : ''}
         ${s.status ? `<button class="status-pill sub-status" data-act="edit-sub-status" title="Status: ${esc(s.status)} (tap to change)">${esc(s.status)}</button>` : ''}
       </li>`).join('')}</ul>` : ''}
     ${!t.context && !t.completedAt ? `
-      <div class="classify">Work or home?
+      <div class="classify">Which list?
         <button data-act="classify" data-val="work">Work</button>
         <button data-act="classify" data-val="home">Home</button>
+        <button data-act="classify" data-val="app">App</button>
       </div>` : ''}
     ${open ? editor(t) : ''}
   </li>`;
@@ -518,16 +628,17 @@ function editor(t) {
       </div>
       <label>Note<textarea data-field="note" rows="3" placeholder="Context, links, who asked">${esc(t.note)}</textarea></label>
       <div class="line">
-        <label>Repeats<select data-repeat>
+        ${isAppTask(t) ? '' : `<label>Repeats<select data-repeat>
           <option value=""${!isDaily(t) ? ' selected' : ''}>Doesn't repeat</option>
           <option value="all"${isDaily(t) && t.repeat.days === 'all' ? ' selected' : ''}>Every day (Daily)</option>
           <option value="work"${isDaily(t) && t.repeat.days === 'work' ? ' selected' : ''}>Work days only (Daily)</option>
-        </select></label>
+        </select></label>`}
         ${isDaily(t) ? '' : `<label>Starts (optional)<input type="date" data-field="startDate" value="${esc(t.startDate || '')}" title="The day it joins your Tasks list"></label>
         <label>Due (optional)<input type="date" data-field="dueDate" value="${esc(t.dueDate || '')}"></label>`}
         <div class="seg" role="group" aria-label="List">
           <button data-act="ctx" data-val="work" ${pressed(t.context, 'work')}>Work</button>
           <button data-act="ctx" data-val="home" ${pressed(t.context, 'home')}>Home</button>
+          <button data-act="ctx" data-val="app" ${pressed(t.context, 'app')}>App</button>
         </div>
         <div class="seg" role="group" aria-label="Priority">
           <button data-act="prio" data-val="normal" ${pressed(t.priority, 'normal')}>Normal</button>
@@ -593,6 +704,7 @@ function renderView() {
   if (state.view === 'today') view.innerHTML = todayHtml();
   else if (state.view === 'calendar') view.innerHTML = calendarHtml();
   else if (state.view === 'import') view.innerHTML = importHtml();
+  else if (state.view === 'time') view.innerHTML = timeHtml();
   else view.innerHTML = settingsHtml();
   initSortables(view);
   initSubtaskSortables(view);
@@ -614,7 +726,8 @@ function todayHtml() {
   for (const key of v.order) {
     const primary = key === state.sched.mode;
     const list = v[key];
-    const label = key === 'work' ? 'Work' : 'Home';
+    const label = contextLabel(key);
+    if (key === 'app') { parts.push(section('app', 'App', list, { secondary: true })); continue; } // shown once it has tasks
     const daily = key === 'work' ? v.dailyWork : v.dailyHome;
     const opts = { daily, dailyDone: v.dailyDone(daily) };
     if (primary) parts.push(section(key, label, list, { ...opts, emptyText: key === 'work' ? 'No work tasks left today.' : 'Nothing on the home list.' }));
@@ -644,9 +757,9 @@ function calendarHtml() {
   const counts = {};
   const dailyOpts = { timeZone: dayOpts.timeZone, workDays: state.settings.workDays };
   for (const d of grid) {
-    const k = { w: 0, h: 0, d: dailyForDay(state.tasks, d, dailyOpts).length };
-    for (const t of tasksForDay(state.tasks, d, dayOpts)) { if (t.context === 'home') k.h++; else k.w++; }
-    if (k.w || k.h || k.d) counts[d] = k;
+    const k = { w: 0, h: 0, a: 0, d: dailyForDay(state.tasks, d, dailyOpts).length };
+    for (const t of tasksForDay(state.tasks, d, dayOpts)) { if (t.context === 'home') k.h++; else if (t.context === 'app') k.a++; else k.w++; }
+    if (k.w || k.h || k.a || k.d) counts[d] = k;
   }
   const monthLabel = new Intl.DateTimeFormat(undefined, { month: 'long', year: 'numeric' })
     .format(new Date(c.year, c.month0, 1));
@@ -654,9 +767,9 @@ function calendarHtml() {
   const days = grid.map((d) => {
     const n = counts[d];
     // One Daily dot (not one per daily task) so dated tasks stay easy to spot.
-    const dots = n ? `${n.d ? '<i class="dly"></i>' : ''}${'<i class="w"></i>'.repeat(Math.min(n.w, 3))}${'<i class="h"></i>'.repeat(Math.min(n.h, 3))}` : '';
+    const dots = n ? `${n.d ? '<i class="dly"></i>' : ''}${'<i class="w"></i>'.repeat(Math.min(n.w, 3))}${'<i class="h"></i>'.repeat(Math.min(n.h, 3))}${'<i class="ap"></i>'.repeat(Math.min(n.a, 2))}` : '';
     const inMonth = Number(d.slice(5, 7)) === c.month0 + 1;
-    const total = n ? n.w + n.h + n.d : 0;
+    const total = n ? n.w + n.h + n.a + n.d : 0;
     return `<button class="cal-day${inMonth ? '' : ' out'}${d === state.sched.today ? ' today' : ''}" data-act="pick-day" data-date="${d}"
       aria-pressed="${d === c.selected}" aria-label="${esc(formatDay(d, { weekday: 'long', month: 'long', day: 'numeric' }))}, ${total} open">
       <span>${Number(d.slice(8))}</span><span class="dots">${dots}</span></button>`;
@@ -668,8 +781,8 @@ function calendarHtml() {
   const total = v.unsorted.length + v.work.length + v.home.length + dayDaily.length;
   const lists = [section('cal-none', 'Needs sorting', v.unsorted)];
   for (const key of v.order) {
-    const daily = dayDaily.filter((t) => (key === 'work' ? t.context === 'work' : t.context !== 'work'));
-    lists.push(section(`cal-${key}`, key === 'work' ? 'Work' : 'Home', v[key], {
+    const daily = key === 'app' ? [] : dayDaily.filter((t) => (key === 'work' ? t.context === 'work' : t.context !== 'work'));
+    lists.push(section(`cal-${key}`, contextLabel(key), v[key], {
       daily,
       dailyDone: isToday ? daily.filter((t) => dailyDoneToday(t, state.sched.today)).length : 0,
       dailyDay: c.selected,
@@ -703,6 +816,133 @@ function calendarHtml() {
         : 'Tasks you add above go on your Tasks list now.'}</p>
   </div>
   ${total ? lists.join('') : `<p class="empty">${mode === 'until-due' ? 'No open tasks run through this day.' : 'Nothing due this day.'}</p>`}`;
+}
+
+// ---------------------------------------------------------------- Time tab
+/** Display name and list for a time line: subtasks show under their task. */
+function timeLineInfo(x) {
+  const t = find(x.taskId);
+  const st = x.subtaskId ? (t?.subtasks || []).find((s2) => s2.id === x.subtaskId) : null;
+  return {
+    title: x.subtaskId ? (st?.title ?? x.title) : (t?.title ?? x.title ?? 'Task'),
+    taskTitle: t?.title ?? null,
+    context: t?.context ?? x.context ?? null,
+  };
+}
+const lineFor = (key, day) => Object.values(dayTotals(state.entries, new Date(), tz())[day] || {}).find((x) => x.key === key);
+const splitKey = (key) => { const [taskId, subId] = key.split('|'); return { taskId, subtaskId: subId || null }; };
+
+/** Group a day's lines: each task's own time, then its subtasks' times indented under it. */
+function groupLines(lines) {
+  const groups = new Map();
+  for (const x of lines) {
+    const g = groups.get(x.taskId) || { taskId: x.taskId, own: null, subs: [], total: 0 };
+    if (x.subtaskId) g.subs.push(x); else g.own = x;
+    g.total += x.seconds;
+    groups.set(x.taskId, g);
+  }
+  return [...groups.values()].sort((a, b) => b.total - a.total);
+}
+
+function timeHtml() {
+  const today = state.sched.today;
+  const days = weekDays(state.timeWeek || today);
+  const totals = dayTotals(state.entries, new Date(), tz());
+  const runKey = runningKey();
+  let weekTotal = 0;
+  const perLine = {};
+  const lineRow = (x, d, isSub) => {
+    const editing = state.timeEdit && state.timeEdit.day === d && state.timeEdit.key === x.key;
+    const live = x.key === runKey && d === today;
+    return `<li class="time-row${isSub ? ' time-sub' : ''}${live ? ' running' : ''}">
+      <span class="time-title">${isSub ? '<span class="sub-mark" aria-hidden="true">›</span>' : `<span class="ctx-dot ctx-${esc(x.context || 'none')}"></span>`}${esc(x.title)}</span>
+      ${editing ? `<span class="time-edit">
+          <input type="text" data-time-input value="${esc(formatDuration(x.seconds))}" aria-label="Time for ${esc(x.title)} (h:mm)">
+          <button class="primary" data-act="time-save">Save</button><button class="plain" data-act="time-cancel">Cancel</button></span>`
+        : `<button class="time-val" data-act="time-edit" data-day="${d}" data-key="${esc(x.key)}" title="Change this time"${live ? ` data-live-time="${esc(x.key)}"` : ''}>${esc(formatDuration(x.seconds, { seconds: live }))}</button>`}
+    </li>`;
+  };
+  const dayBlocks = days.map((d) => {
+    const lines = Object.values(totals[d] || {})
+      .filter((x) => x.seconds > 0 || (x.key === runKey && d === today))
+      .map((x) => ({ ...x, ...timeLineInfo(x) }));
+    const dayTotal = lines.reduce((n, x) => n + x.seconds, 0); // task and subtask time: all of it
+    weekTotal += dayTotal;
+    for (const x of lines) (perLine[x.key] ||= { ...x, seconds: 0 }).seconds += x.seconds;
+    const rows = groupLines(lines).map((g) => {
+      const own = g.own || { key: timeKey(g.taskId), taskId: g.taskId, subtaskId: null, seconds: 0, ...timeLineInfo({ taskId: g.taskId, title: g.subs[0]?.taskTitle }) };
+      const ownRow = g.own ? lineRow(own, d, false)
+        : `<li class="time-row"><span class="time-title"><span class="ctx-dot ctx-${esc(own.context || 'none')}"></span>${esc(g.subs[0]?.taskTitle ?? own.title)}</span><span class="time-none">–</span></li>`;
+      return ownRow + g.subs.sort((a, b) => b.seconds - a.seconds).map((x) => lineRow(x, d, true)).join('');
+    }).join('');
+    const addOpen = state.timeAddDay === d;
+    // Choices for "+ Add time": open tasks and their open subtasks, plus anything with time this week.
+    const choices = [];
+    for (const t of state.tasks.filter((x) => (!x.completedAt || x.completedOn === today) && !isAppTask(x))) {
+      choices.push({ key: timeKey(t.id), label: t.title });
+      for (const st of t.subtasks || []) choices.push({ key: timeKey(t.id, st.id), label: `${t.title} › ${st.title}` });
+    }
+    for (const x of Object.values(perLine)) if (!choices.some((c) => c.key === x.key)) choices.push({ key: x.key, label: x.subtaskId ? `${x.taskTitle ?? 'Task'} › ${x.title}` : x.title });
+    return `<section class="time-day${d === today ? ' today' : ''}">
+      <h3><span>${esc(formatDay(d, { weekday: 'long', month: 'short', day: 'numeric' }))}</span><span class="time-total">${dayTotal ? esc(formatDuration(dayTotal)) : ''}</span></h3>
+      ${rows ? `<ul class="time-list">${rows}</ul>` : '<p class="empty">No time logged.</p>'}
+      ${addOpen ? `<div class="time-add">
+          <select data-time-task aria-label="Task or subtask">${choices.map((c) => `<option value="${esc(c.key)}">${esc(c.label)}</option>`).join('')}</select>
+          <input type="text" data-time-add-input placeholder="1:30" aria-label="Time to add (h:mm)">
+          <button class="primary" data-act="time-add-save" data-day="${d}">Add</button><button class="plain" data-act="time-cancel">Cancel</button>
+        </div>` : `<button class="link" data-act="time-add" data-day="${d}">+ Add time</button>`}
+    </section>`;
+  }).join('');
+  const taskTotals = Object.values(perLine).sort((a, b) => b.seconds - a.seconds)
+    .map((x) => `<li><span class="time-title"><span class="ctx-dot ctx-${esc(x.context || 'none')}"></span>${esc(x.subtaskId ? `${x.taskTitle ?? 'Task'} › ${x.title}` : x.title)}</span><span>${esc(formatDuration(x.seconds))}</span></li>`).join('');
+  const isThisWeek = days.includes(today);
+  return `
+  <div class="panel time-panel">
+    <div class="time-head">
+      <h2>${isThisWeek ? 'This week' : `Week of ${esc(formatDay(days[0], { month: 'short', day: 'numeric' }))}`}</h2>
+      <div class="nav">
+        <button class="plain" data-act="time-prev" aria-label="Previous week">‹</button>
+        ${isThisWeek ? '' : '<button class="plain" data-act="time-this-week">This week</button>'}
+        <button class="plain" data-act="time-next" aria-label="Next week"${isThisWeek ? ' disabled' : ''}>›</button>
+      </div>
+    </div>
+    <p class="time-week-total">Week total <strong>${esc(formatDuration(weekTotal))}</strong></p>
+    ${taskTotals ? `<details class="time-by-task"${state.timeByTaskOpen ? ' open' : ''}><summary>By task</summary><ul>${taskTotals}</ul></details>` : ''}
+    <p class="hint" style="margin:0">Tap a time to correct it. Subtasks have their own times, shown under their task. A timer still running when work hours end stops by itself at that time.</p>
+  </div>
+  ${dayBlocks}`;
+}
+
+function timeTarget(key, line) {
+  const { taskId, subtaskId } = splitKey(key);
+  const live = timerTarget(taskId, subtaskId);
+  return live || { id: taskId, subtaskId, title: line?.title ?? 'Task', context: line?.context ?? null };
+}
+
+async function saveTimeEdit() {
+  const input = document.querySelector('input[data-time-input]');
+  const secs = parseDuration(input?.value);
+  if (secs === null) { toast('Enter a time like 1:30, 90m or 1.5h.'); return; }
+  const { day, key } = state.timeEdit;
+  const info = timeTarget(key, lineFor(key, day));
+  state.timeEdit = null;
+  document.activeElement?.blur();
+  await guarded(() => commitTime(setDayTotal(state.entries, info, day, secs, new Date(), tz(), entryId)));
+  toast(`${info.title}: ${formatDuration(secs)} on ${formatDay(day)}`);
+}
+
+async function saveTimeAdd() {
+  const day = state.timeAddDay;
+  const key = document.querySelector('select[data-time-task]')?.value;
+  const secs = parseDuration(document.querySelector('input[data-time-add-input]')?.value);
+  if (!key) return;
+  if (secs === null || secs <= 0) { toast('Enter a time like 1:30, 90m or 1.5h.'); return; }
+  const existing = lineFor(key, day);
+  const info = timeTarget(key, existing);
+  state.timeAddDay = null;
+  document.activeElement?.blur();
+  await guarded(() => commitTime(setDayTotal(state.entries, info, day, (existing?.seconds || 0) + secs, new Date(), tz(), entryId)));
+  toast(`Added ${formatDuration(secs)} to ${info.title}`);
 }
 
 const REASONS = {
@@ -816,7 +1056,7 @@ function settingsHtml() {
       }).join('')}
     </div>
     <div class="swatch-preview" aria-label="Preview">
-      <span style="color:var(--work-text)">Work</span><span style="color:var(--home-text)">Home</span><span style="color:var(--daily-text);border-left:4px solid var(--daily)">Daily</span><span style="color:var(--status);border-color:var(--status);font-weight:700">Waiting</span>
+      <span style="color:var(--work-text)">Work</span><span style="color:var(--home-text)">Home</span><span style="color:var(--app-text)">App</span><span style="color:var(--daily-text);border-left:4px solid var(--daily)">Daily</span><span style="color:var(--status);border-color:var(--status);font-weight:700">Waiting</span>
       <span style="color:var(--flag);font-weight:700">High</span><span style="color:var(--soon);font-weight:700">Due in 2 days</span>
       <span style="color:var(--today);font-weight:700">Due today</span><span style="color:var(--danger);font-weight:700">Overdue</span>
       <span style="border-left:4px solid var(--sort)">Needs sorting</span>
@@ -928,7 +1168,7 @@ function askToNest(srcId, targetId) {
   const n = (src.subtasks || []).length;
   if (n) notes.push(`Its ${n} subtask${n === 1 ? '' : 's'} move${n === 1 ? 's' : ''} with it.`);
   if (src.note?.trim()) notes.push(`Its note is added to ${esc(tgt.title)}'s note.`);
-  if (src.context !== tgt.context && tgt.context) notes.push(`It joins the ${tgt.context === 'work' ? 'Work' : 'Home'} list with ${esc(tgt.title)}.`);
+  if (src.context !== tgt.context && tgt.context) notes.push(`It joins the ${contextLabel(tgt.context)} list with ${esc(tgt.title)}.`);
   $('#nest-details').innerHTML = notes.map((x) => `<li>${x}</li>`).join('');
   $('#nest-details').hidden = !notes.length;
   dlg.returnValue = '';
@@ -940,6 +1180,7 @@ function askToNest(srcId, targetId) {
 async function nestTask(srcId, targetId) {
   const src = find(srcId), tgt = find(targetId);
   if (!src || !tgt) return;
+  await stopTimerIfFor(srcId);
   const before = { subtasks: tgt.subtasks || [], note: tgt.note || '' };
   const after = {
     subtasks: sortSubtasks([...before.subtasks, ...taskAsSubtasks(src)]),
@@ -1067,10 +1308,29 @@ function wireView() {
         render({ force: true });
         break;
       }
+      case 'timer': {
+        const subId = btn.dataset.subTimer || null;
+        guarded(() => (runningKey() === timeKey(id, subId) ? stopRunningTimer() : startTimerFor(id, subId)));
+        break;
+      }
+      case 'timer-stop': guarded(stopRunningTimer); break;
+      case 'time-prev': case 'time-next':
+        state.timeWeek = addDays(weekDays(state.timeWeek || state.sched.today)[0], act === 'time-next' ? 7 : -7);
+        state.timeEdit = null; state.timeAddDay = null; render(); break;
+      case 'time-this-week': state.timeWeek = null; state.timeEdit = null; state.timeAddDay = null; render(); break;
+      case 'time-edit':
+        state.timeEdit = { day: btn.dataset.day, key: btn.dataset.key }; state.timeAddDay = null;
+        focusAfterRender = 'input[data-time-input]'; render({ force: true }); break;
+      case 'time-cancel': state.timeEdit = null; state.timeAddDay = null; render({ force: true }); break;
+      case 'time-save': saveTimeEdit(); break;
+      case 'time-add':
+        state.timeAddDay = btn.dataset.day; state.timeEdit = null;
+        focusAfterRender = 'select[data-time-task]'; render({ force: true }); break;
+      case 'time-add-save': saveTimeAdd(); break;
       case 'toggle-subs': setFolded(id, !folded.has(id)); render(); break;
       case 'sub-del': {
         const subId = btn.closest('[data-sub]').dataset.sub;
-        guarded(() => changeSubtasks(id, (l) => removeSubtask(l, subId)));
+        guarded(async () => { await stopSubTimerIfFor(id, subId); await changeSubtasks(id, (l) => removeSubtask(l, subId)); });
         break;
       }
       case 'sub-prio': {
@@ -1102,7 +1362,10 @@ function wireView() {
     if (el.dataset.act === 'done') { guarded(() => setDone(id, el.checked)); return; }
     if (el.dataset.act === 'sub-done') {
       const subId = el.closest('[data-sub]').dataset.sub;
-      guarded(() => changeSubtasks(id, (l) => setSubtaskDone(l, subId, el.checked)));
+      guarded(async () => {
+        if (el.checked) await stopSubTimerIfFor(id, subId);
+        await changeSubtasks(id, (l) => setSubtaskDone(l, subId, el.checked));
+      });
       return;
     }
     if (el.matches('select[data-repeat]') && id) {
@@ -1150,11 +1413,19 @@ function wireView() {
 
   // Enter in "Add a subtask" adds it and keeps the cursor there for the next one.
   view.addEventListener('keydown', (e) => {
+    if (e.target.matches('input[data-time-input]')) {
+      if (e.key === 'Enter') { e.preventDefault(); saveTimeEdit(); }
+      if (e.key === 'Escape') { state.timeEdit = null; document.activeElement.blur(); render({ force: true }); }
+    }
+    if (e.target.matches('input[data-time-add-input]') && e.key === 'Enter') { e.preventDefault(); saveTimeAdd(); }
     if (e.key === 'Enter' && e.target.hasAttribute('data-sub-new')) { e.preventDefault(); addSubtaskFromInput(e.target); }
     if (e.key === 'Enter' && e.target.hasAttribute('data-sub-new-due')) {
       e.preventDefault(); addSubtaskFromInput(e.target.closest('.sub-new').querySelector('[data-sub-new]'));
     }
   });
+
+  // Remember whether "By task" is open, so refreshes don't fold it away.
+  view.addEventListener('toggle', (e) => { if (e.target.matches?.('.time-by-task')) state.timeByTaskOpen = e.target.open; }, true);
 
   view.addEventListener('input', (e) => {
     const draftFor = e.target.closest('.sub-new')?.querySelector('[data-sub-new]')?.dataset.subNew;
@@ -1405,6 +1676,7 @@ async function startApp(uid) {
   unsubscribe?.();
   unsubscribe = store.subscribe(scheduleReload, (ok) => { state.online = ok; renderBand(); });
   setInterval(() => guarded(async () => { await applySchedule(); render(); }), 60_000);
+  setInterval(tickTimer, 1000);
   setInterval(scheduleReload, 5 * 60_000);
   // Coming back to the window (restored from minimized, switched back to on the phone) just
   // refreshes the data. The banner stays the way you left it; only opening the app resets it.

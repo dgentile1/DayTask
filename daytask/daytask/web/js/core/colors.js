@@ -1,10 +1,11 @@
 // Pure colour maths for user-chosen colours: keep text readable whatever is picked.
 
-export const COLOR_KEYS = ['work', 'home', 'daily', 'status', 'high', 'soon', 'today', 'overdue', 'unsorted'];
+export const COLOR_KEYS = ['work', 'home', 'app', 'daily', 'status', 'high', 'soon', 'today', 'overdue', 'unsorted'];
 
 export const COLOR_LABELS = {
   work: 'Work',
   home: 'Home',
+  app: 'App',
   daily: 'Daily tasks',
   status: 'Status',
   high: 'High priority',
@@ -16,8 +17,8 @@ export const COLOR_LABELS = {
 
 // Built-in palette (what the stylesheet uses), per theme. Shown in the pickers when nothing is customised.
 export const DEFAULT_COLORS = {
-  light: { work: '#2C64A8', home: '#2F7D55', daily: '#0F766E', status: '#475569', high: '#B4470F', soon: '#8A5A00', today: '#B4470F', overdue: '#B42318', unsorted: '#6E4FA0' },
-  dark:  { work: '#3F78BE', home: '#3A8C62', daily: '#2BA59A', status: '#94A3B8', high: '#F08A4B', soon: '#E8B84A', today: '#F08A4B', overdue: '#F2766B', unsorted: '#8B6CC0' },
+  light: { work: '#2C64A8', home: '#2F7D55', app: '#A3366F', daily: '#0F766E', status: '#475569', high: '#B4470F', soon: '#8A5A00', today: '#B4470F', overdue: '#B42318', unsorted: '#6E4FA0' },
+  dark:  { work: '#3F78BE', home: '#3A8C62', app: '#D45C9B', daily: '#2BA59A', status: '#94A3B8', high: '#F08A4B', soon: '#E8B84A', today: '#F08A4B', overdue: '#F2766B', unsorted: '#8B6CC0' },
 };
 
 export const SURFACES = {
@@ -94,6 +95,11 @@ export function themeVars(colors, theme) {
     vars['--home'] = c.home;
     vars['--on-home'] = onColor(c.home);
     vars['--home-text'] = readableOn(c.home, bgs, theme);
+  }
+  if (isHex(c.app)) {
+    vars['--app'] = c.app;
+    vars['--on-app'] = onColor(c.app);
+    vars['--app-text'] = readableOn(c.app, bgs, theme);
   }
   if (isHex(c.daily)) {
     vars['--daily'] = c.daily;

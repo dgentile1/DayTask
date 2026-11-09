@@ -2,7 +2,7 @@
 // Strategy: network first (so updates arrive as soon as you're online), falling back to the
 // stored copy when offline or when the network is too slow. Supabase traffic is never touched;
 // task data offline is handled by js/data/sync.js.
-const CACHE = 'daytask-app-v2';
+const CACHE = 'daytask-app-v3';
 const FILES = [
   './',
   'index.html',
@@ -23,6 +23,7 @@ const FILES = [
   'js/core/outbox.js',
   'js/core/schedule.js',
   'js/core/subtasks.js',
+  'js/core/timer.js',
   'js/data/store.js',
   'js/data/sync.js',
   'js/integrations/granola/importer.js',

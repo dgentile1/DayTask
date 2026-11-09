@@ -2,7 +2,10 @@
 // and sent to Supabase in order whenever there's a connection. Reads come from Supabase
 // when online, with unsent changes shown on top, and from the device cache when not.
 import * as store from './store.js';
-import { enqueue, applyOutbox, isRetryable, isDuplicate } from '../core/outbox.js';
+import { enqueue, applyOutbox, applyEntryOutbox, isRetryable, isDuplicate } from '../core/outbox.js';
+import { addDays } from '../core/dates.js';
+
+const HISTORY_DAYS = 63; // time entries kept on hand: 9 weeks
 
 const CACHE_KEY = 'daytask.cache.v1';
 const OUTBOX_KEY = 'daytask.outbox.v1';
@@ -50,21 +53,22 @@ const uuid = () => globalThis.crypto?.randomUUID?.()
 export async function loadAll(today) {
   try {
     const [settings, tasks] = [await store.loadSettings(), await store.loadTasks(today)];
+    const entries = await store.loadEntries(addDays(today, -HISTORY_DAYS));
     markReachable(true);
     const merged = applyOutbox(tasks, settings, outbox);
     flush(); // we're online: send anything waiting
-    return { ...merged, fromCache: false };
+    return { ...merged, entries: applyEntryOutbox(entries, outbox), fromCache: false };
   } catch (err) {
     if (!cache || !isRetryable(err)) throw err;
     markReachable(false);
     const tasks = cache.tasks.filter((t) => !t.completedAt || t.completedOn === today);
-    return { ...applyOutbox(tasks, cache.settings, outbox), fromCache: true };
+    return { ...applyOutbox(tasks, cache.settings, outbox), entries: applyEntryOutbox(cache.entries || [], outbox), fromCache: true };
   }
 }
 
 /** Keep the device copy current. Called by the app after every load and change. */
-export function snapshot(userId, tasks, settings) {
-  cache = { userId, tasks, settings, importFps: cache?.importFps ?? [], savedAt: new Date().toISOString() };
+export function snapshot(userId, tasks, settings, entries = cache?.entries ?? []) {
+  cache = { userId, tasks, settings, entries, importFps: cache?.importFps ?? [], savedAt: new Date().toISOString() };
   write(CACHE_KEY, cache);
 }
 
@@ -100,6 +104,9 @@ export function insertTask(task) {
 export function updateTask(id, patch) { queue({ kind: 'update', taskId: id, patch }); }
 export function updateMany(patches) { for (const { id, ...patch } of patches) queue({ kind: 'update', taskId: id, patch }); }
 export function deleteTask(id) { queue({ kind: 'delete', taskId: id }); }
+export function insertEntry(entry) { queue({ kind: 'insert', table: 'time_entries', taskId: entry.id, row: entry }); }
+export function updateEntry(id, patch) { queue({ kind: 'update', table: 'time_entries', taskId: id, patch }); }
+export function deleteEntry(id) { queue({ kind: 'delete', table: 'time_entries', taskId: id }); }
 export function saveSettings(settings) { queue({ kind: 'settings', settings }); }
 
 export function logImport(fingerprint, taskId) {
@@ -123,6 +130,12 @@ export async function existingImportFingerprints(fps) {
 // ---------------------------------------------------------------- sending
 
 async function send(op) {
+  if (op.table === 'time_entries') {
+    if (op.kind === 'insert') { try { await store.insertEntry(op.row); } catch (err) { if (!isDuplicate(err)) throw err; } }
+    else if (op.kind === 'update') await store.updateEntry(op.taskId, op.patch);
+    else if (op.kind === 'delete') await store.deleteEntry(op.taskId);
+    return;
+  }
   switch (op.kind) {
     case 'insert':
       try { await store.insertTask(op.row); } catch (err) { if (!isDuplicate(err)) throw err; }

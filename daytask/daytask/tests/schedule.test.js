@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  scheduleState, initialSortKey, sortKeyBetween, buildTodayView, normalizeSettings, nextWorkday, dueStatus, dueSoonTasks,
+  scheduleState, initialSortKey, sortKeyBetween, buildTodayView, normalizeSettings, nextWorkday, dueStatus, dueSoonTasks, listSiblings,
 } from '../web/js/core/schedule.js';
 
 const S = normalizeSettings({ timezone: 'America/Chicago', workStart: '08:00', workEnd: '17:00' });
@@ -64,7 +64,7 @@ test('every open task is listed until checked off, whatever its due date', () =>
     { id: 'u1', context: null, dueDate: null, sortKey: 1000 },
   ];
   const v = buildTodayView(tasks, state);
-  assert.deepEqual(v.order, ['home', 'work']);
+  assert.deepEqual(v.order, ['home', 'work', 'app']);
   assert.deepEqual(v.home.map((t) => t.id), ['h1', 'h2']);
   assert.deepEqual(v.work.map((t) => t.id), ['w2', 'w1']); // far-future and overdue both shown, manual order
   assert.deepEqual(v.unsorted.map((t) => t.id), ['u1']);
@@ -348,4 +348,25 @@ test('pushing the work end out after the switch to Home', async () => {
   // An extension already past the new end stays.
   const ext = { ...base, workExtension: { date: '2026-11-05', endTime: '19:00', ended: false } };
   assert.deepEqual(applyWorkHoursChange(ext, { ...ext, workEnd: '18:00' }, cst('17:15')).workExtension, ext.workExtension);
+});
+
+test('App list: its own section after Work and Home, carried over like Home', async () => {
+  const { isAppTask, contextLabel } = await import('../web/js/core/schedule.js');
+  const mon10 = scheduleState(at('2026-11-02T16:00:00Z'), S), mon1730 = scheduleState(at('2026-11-02T23:30:00Z'), S);
+  const tasks = [
+    { id: 'w', context: 'work', sortKey: 1 }, { id: 'h', context: 'home', sortKey: 1 },
+    { id: 'a2', context: 'app', sortKey: 2 }, { id: 'a1', context: 'app', sortKey: 1 },
+  ];
+  const v = buildTodayView(tasks, mon10);
+  assert.deepEqual(v.order, ['work', 'home', 'app']);
+  assert.deepEqual(buildTodayView(tasks, mon1730).order, ['home', 'work', 'app']);
+  assert.deepEqual(v.app.map((t) => t.id), ['a1', 'a2']);
+  assert.deepEqual([v.work.length, v.home.length], [1, 1]);
+  const due = { id: 'x', context: 'app', dueDate: '2026-11-02' };
+  const { carryInfo } = await import('../web/js/core/schedule.js');
+  assert.equal(carryInfo(due, mon1730).carried, false); // not at work end (like Home)
+  assert.equal(carryInfo(due, scheduleState(at('2026-11-03T16:00:00Z'), S)).carried, true); // once the day has passed
+  assert.equal(isAppTask(due), true);
+  assert.deepEqual(['work', 'home', 'app', null].map(contextLabel), ['Work', 'Home', 'App', 'Needs sorting']);
+  assert.deepEqual(listSiblings(tasks, 'app').map((t) => t.id), ['a1', 'a2']);
 });

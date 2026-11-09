@@ -268,12 +268,14 @@ export function buildTodayView(tasks, state, { includeNotStarted = false } = {})
   const daily = tasks.filter((t) => !t.completedAt && dailyShowsToday(t, state)).sort(bySortKey);
   return {
     startsLater: later.sort((a, b) => a.startDate.localeCompare(b.startDate) || bySortKey(a, b)),
-    order: state.mode === 'work' ? ['work', 'home'] : ['home', 'work'],
+    // App (ideas and updates for this app) always comes after Work and Home.
+    order: state.mode === 'work' ? ['work', 'home', 'app'] : ['home', 'work', 'app'],
     dailyWork: daily.filter((t) => t.context === 'work'),
-    dailyHome: daily.filter((t) => t.context !== 'work'),
+    dailyHome: daily.filter((t) => t.context === 'home' || !t.context),
     dailyDone: (list) => list.filter((t) => dailyDoneToday(t, state.today)).length,
     work: listOrder(open.filter((t) => t.context === 'work'), state),
     home: listOrder(open.filter((t) => t.context === 'home'), state),
+    app: listOrder(open.filter((t) => t.context === 'app'), state),
     unsorted: listOrder(open.filter((t) => !t.context), state),
     done: tasks.filter((t) => t.completedAt && t.completedOn === state.today)
       .sort((a, b) => String(b.completedAt).localeCompare(String(a.completedAt))),
@@ -356,3 +358,17 @@ export function dailyForDay(tasks, day, { timeZone, workDays }) {
     return !first || day >= first;
   }).sort(bySortKey);
 }
+
+/** Minutes after midnight when the lists switch to Home on `day` (its work-day end), using that day's extension if any. */
+export function switchMinutesFor(day, settings) {
+  const s = normalizeSettings(settings);
+  const ext = s.workExtension && s.workExtension.date === day ? s.workExtension : null;
+  const workEnd = ext ? ext.endTime : s.workEnd;
+  const switchMin = ext?.ended ? toMin(workEnd) : toMin(workEnd) - s.extendPromptMinutes + s.extendVisibleMinutes;
+  return Math.min(switchMin, 24 * 60);
+}
+
+/** The App list: ideas and updates for this app. Same as other tasks, minus timers and Repeats. */
+export const isAppTask = (t) => t?.context === 'app';
+export const CONTEXTS = ['work', 'home', 'app'];
+export const contextLabel = (c) => ({ work: 'Work', home: 'Home', app: 'App' }[c] || 'Needs sorting');

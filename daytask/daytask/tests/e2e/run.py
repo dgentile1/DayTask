@@ -6,16 +6,22 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 from playwright.sync_api import sync_playwright
 
 WEB = os.path.join(HERE, '..', '..', 'web')
-db = {'tasks': [], 'user_settings': [], 'import_log': []}
+db = {'tasks': [], 'user_settings': [], 'import_log': [], 'time_entries': []}
 pages = []
 
 def matches(row, f):
     for flt in f:
         if flt[0] == 'eq' and str(row.get(flt[1])) != str(flt[2]): return False
         if flt[0] == 'in' and row.get(flt[1]) not in flt[2]: return False
-        if flt[0] == 'or':
-            m = re.match(r'completed_at\.is\.null,completed_on\.eq\.(.+)', flt[1])
-            if not (row.get('completed_at') is None or row.get('completed_on') == m.group(1)): return False
+        if flt[0] == 'or':  # PostgREST "a.op.v,b.op.v": any clause matching is enough
+            def clause(c):
+                col, op, val = c.split('.', 2)
+                v = row.get(col)
+                if op == 'is': return v is None
+                if op == 'eq': return str(v) == val
+                if op == 'gte': return v is not None and str(v) >= val
+                return False
+            if not any(clause(c) for c in flt[1].split(',')): return False
     return True
 
 state = {'version': 0}
@@ -29,6 +35,11 @@ def handle(raw):
         if p['limit']: rows = rows[:p['limit']]
         out = rows
     elif a == 'insert':
+        if p['t'] == 'time_entries':
+            if any(r['id'] == p['payload'].get('id') for r in t):
+                return json.dumps({'data': None, 'error': {'message': 'duplicate key', 'code': '23505'}})
+            t.append(dict(p['payload'])); state['version'] += 1
+            return json.dumps({'data': None, 'error': None})
         if any(r['id'] == p['payload'].get('id') for r in t):
             return json.dumps({'data': None, 'error': {'message': 'duplicate key', 'code': '23505'}})
         row = {'id': str(uuid.uuid4()), 'note': '', 'priority': 'normal', 'context': None, 'completed_at': None,
@@ -973,11 +984,11 @@ with sync_playwright() as p:
 
     # Checking things off doesn't make the header jump.
     hb = open_page(browser, 400, 900, '2026-11-03T16:00:00Z', 'header-steady')
-    h0 = hb.locator('#band').bounding_box()['height']
+    h0 = boxes(hb, hb.locator('#band'))[0]['height']
     heights = []
     hb.locator('li.task:not(.done) .check').first.click()
     for _ in range(12):
-        heights.append(hb.locator('#band').bounding_box()['height']); hb.wait_for_timeout(100)
+        heights.append(boxes(hb, hb.locator('#band'))[0]['height']); hb.wait_for_timeout(100)
     check(max(abs(h - h0) for h in heights) < 1, f'header height stays put while a change syncs: {h0} vs {sorted(set(heights))}')
     check(hb.locator('#band .sync-slot').inner_text() == '', 'a quick sync shows no message at all')
     hb.close()
@@ -990,11 +1001,11 @@ with sync_playwright() as p:
         a, b = boxes(pg, left, right)
         return b['x'] >= a['x'] + a['width'] - 1 and abs((a['y'] + a['height'] / 2) - (b['y'] + b['height'] / 2)) < 6
     # Status while adding a task.
-    full_w = sp.locator('#add input[name=title]').bounding_box()['width']
+    full_w = boxes(sp, sp.locator('#add input[name=title]'))[0]['width']
     check(not sp.locator('#add input[name=status]').is_visible(), 'add form: no Status box until the toggle is on')
     sp.click('#add [data-status-toggle]'); sp.wait_for_timeout(100)
     check(sp.evaluate("document.activeElement?.name") == 'status' and beside(sp, sp.locator('#add input[name=title]'), sp.locator('#add input[name=status]'))
-          and sp.locator('#add input[name=title]').bounding_box()['width'] < full_w - 40,
+          and boxes(sp, sp.locator('#add input[name=title]'))[0]['width'] < full_w - 40,
           'toggle on: Status box appears right of "Add a task" (which shrinks), ready to type')
     sp.click('#add [data-ctx="work"]')
     sp.fill('#add input[name=title]', 'Order spare fuses'); sp.fill('#add input[name=status]', '  Quote requested ')
@@ -1009,14 +1020,14 @@ with sync_playwright() as p:
     sp.fill('#add input[name=title]', 'No status task'); sp.press('#add input[name=title]', 'Enter'); sp.wait_for_timeout(400)
     check(row('No status task')['status'] is None and li('No status task').locator('.row > .status-pill').count() == 0, 'left blank: no status')
     li('Order relay').locator('[data-act="expand"]').click()
-    name_w = li('Order relay').locator('input[data-field="title"]').bounding_box()['width']
+    name_w = boxes(sp, li('Order relay').locator('input[data-field="title"]'))[0]['width']
     check(li('Order relay').locator('input[data-field="status"]').count() == 0
           and li('Order relay').locator('[data-act="status-toggle"]').get_attribute('aria-pressed') == 'false',
           'editor: no Status box until the Status toggle is on; Task name keeps its full width')
     li('Order relay').locator('[data-act="status-toggle"]').click(); sp.wait_for_timeout(200)
     box = li('Order relay').locator('input[data-field="status"]')
     check(beside(sp, li('Order relay').locator('input[data-field="title"]'), box) and sp.evaluate("document.activeElement?.dataset?.field") == 'status'
-          and li('Order relay').locator('input[data-field="title"]').bounding_box()['width'] < name_w - 40,
+          and boxes(sp, li('Order relay').locator('input[data-field="title"]'))[0]['width'] < name_w - 40,
           'toggle on: Status box right of the Task name (which shrinks), ready to type')
     box.fill('Waiting on vendor quote'); box.press('Tab'); sp.wait_for_timeout(400)
     check(row('Order relay')['status'] == 'Waiting on vendor quote', 'status saved')
@@ -1099,6 +1110,233 @@ with sync_playwright() as p:
     check(db['user_settings'][0]['settings']['colors'].get('status') == '#FFD000' and contrast_js(sp, '--status', '#FFFFFF') >= 4.5,
           'Status colour saved and kept readable')
     sp.close()
+
+    # Time tracking.
+    tm = open_page(browser, 400, 1400, '2026-11-03T16:00:00Z', 'time')  # Tue 10:00
+    def tli(title): return tm.locator('ul[data-list="work"] li.task', has_text=title).first
+    def tbtn(title): return tli(title).locator('.row > .timer-btn')
+    def ents(): return db['time_entries']
+    def running(): return [e for e in ents() if e['kind'] == 'timer' and e['ended_at'] is None]
+    def tick(iso): tm.clock.set_fixed_time(iso); tm.wait_for_timeout(1300)
+    A, B, C = 'Flash test units', 'Submit timesheet', 'Order relay'
+    check(tbtn(A).inner_text().strip() == '▶' and tm.locator('#band .band-timer').count() == 0, 'each task has a start button; nothing running')
+    tbtn(A).click(); tm.wait_for_timeout(400)
+    check('running' in tbtn(A).get_attribute('class') and len(running()) == 1 and running()[0]['title'] == A
+          and A in tm.inner_text('#band .band-timer'), 'start: button turns into stop, header shows the running task')
+    tick('2026-11-03T16:30:00Z')
+    check(tbtn(A).locator('.tt').inner_text() == '0:30:00' and tm.locator('#band [data-live-total]').inner_text() == '0:30:00',
+          'the clock counts up live on the task and in the header')
+    tbtn(B).click(); tm.wait_for_timeout(400)
+    a1 = [e for e in ents() if e['title'] == A][0]
+    check(a1['ended_at'] == '2026-11-03T16:30:00.000Z' and a1['seconds'] == 1800 and running()[0]['title'] == B,
+          'starting another task stops the first one')
+    tick('2026-11-03T16:45:00Z')
+    tbtn(A).click(); tm.wait_for_timeout(400)
+    tick('2026-11-03T17:00:00Z')
+    check(tbtn(A).locator('.tt').inner_text() == '0:45:00' and len([e for e in ents() if e['title'] == A]) == 2,
+          'starting the first task again adds on to its time')
+    tli(A).locator('.check').click(); tm.wait_for_timeout(500)
+    check(running() == [] and sum(e['seconds'] for e in ents() if e['title'] == A) == 2700, 'checking a task off stops its timer')
+    tm.click('.tabs [data-view="time"]'); tm.wait_for_timeout(300)
+    def tday(label): return tm.locator('section.time-day', has_text=label).first
+    def tval(label, title): return tday(label).locator('li.time-row', has_text=title).locator('.time-val')
+    check(tval('Tuesday, Nov 3', A).inner_text() == '0:45' and tval('Tuesday, Nov 3', B).inner_text() == '0:15'
+          and tday('Tuesday, Nov 3').locator('.time-total').inner_text() == '1:00' and 'Week total 1:00' in tm.inner_text('.time-week-total'),
+          'Time tab: each day lists its tasks and totals, plus a week total')
+    tval('Tuesday, Nov 3', A).click(); tm.wait_for_timeout(200)
+    tm.fill('input[data-time-input]', '1:30'); tm.press('input[data-time-input]', 'Enter'); tm.wait_for_timeout(500)
+    adj = [e for e in ents() if e['kind'] == 'adjust']
+    check(tval('Tuesday, Nov 3', A).inner_text() == '1:30' and len(adj) == 1 and adj[0]['seconds'] == 2700 and adj[0]['day'] == '2026-11-03'
+          and 'Week total 1:45' in tm.inner_text('.time-week-total'), 'tap a time to correct it (kept as one correction)')
+    for _ in range(5):  # a refresh can swallow the click; try again until the row opens
+        if tm.locator('select[data-time-task]').count(): break
+        tday('Monday, Nov 2').locator('[data-act="time-add"]').click(); tm.wait_for_timeout(300)
+    tm.select_option('select[data-time-task]', label=B)
+    tm.fill('input[data-time-add-input]', '45m'); tm.click('[data-act="time-add-save"]'); tm.wait_for_timeout(500)
+    check(tval('Monday, Nov 2', B).inner_text() == '0:45' and 'Week total 2:30' in tm.inner_text('.time-week-total'), '+ Add time logs time on a day')
+    tm.click('.time-by-task summary')
+    check(B in tm.inner_text('.time-by-task') and '1:00' in tm.inner_text('.time-by-task'), 'week totals by task')
+    tm.click('[data-act="time-prev"]'); tm.wait_for_timeout(200)
+    check('Week of Oct 26' in tm.inner_text('.time-head') and 'Week total 0:00' in tm.inner_text('.time-week-total'), 'look back at earlier weeks')
+    tm.click('[data-act="time-this-week"]'); tm.wait_for_timeout(200)
+    no_overflow(tm, 'Time tab')
+    tm.screenshot(path=os.path.join(HERE, 'time.png'), full_page=True)
+    tm.click('.tabs [data-view="today"]'); tm.wait_for_timeout(200)
+
+    # Subtask timers: their own time, separate from the task's.
+    tm.click('.tabs [data-view="today"]'); tm.wait_for_timeout(200)
+    tli(B).locator('[data-act="expand"]').click()
+    nb = tli(B).locator('[data-sub-new]')
+    for nm in ['Gather receipts', 'Fill form']:
+        nb.fill(nm); nb.press('Enter'); tm.wait_for_timeout(300)
+    tli(B).locator('[data-act="collapse"]').click(); tm.wait_for_timeout(200)
+    def sbtn(name): return tli(B).locator('ul.subtasks li', has_text=name).locator('.timer-btn')
+    check(sbtn('Gather receipts').count() == 1 and sbtn('Fill form').count() == 1, 'each subtask has its own start button')
+    tm.clock.set_fixed_time('2026-11-03T17:05:00Z')
+    sbtn('Gather receipts').click(); tm.wait_for_timeout(400)
+    r0 = running()[0] if running() else {}
+    check(r0.get('subtask_id') and r0.get('title') == 'Gather receipts' and 'running' in sbtn('Gather receipts').get_attribute('class')
+          and 'running' not in tbtn(B).get_attribute('class') and 'Gather receipts' in tm.inner_text('#band .band-timer'),
+          'subtask timer runs on its own (the task\'s button stays as it was), header shows the subtask')
+    tick('2026-11-03T17:25:00Z')
+    check(sbtn('Gather receipts').locator('.tt').inner_text() == '0:20:00' and tbtn(B).locator('.tt').inner_text() == '0:15',
+          'subtask time counts on the subtask, not the task')
+    tbtn(B).click(); tm.wait_for_timeout(400)
+    g = [e for e in ents() if e.get('subtask_id') and e['title'] == 'Gather receipts'][0]
+    check(g['seconds'] == 1200 and running()[0]['subtask_id'] in (None, '') and running()[0]['title'] == B, 'starting the task stops its subtask\'s timer')
+    tick('2026-11-03T17:30:00Z')
+    sbtn('Fill form').click(); tm.wait_for_timeout(400)
+    check(running()[0]['title'] == 'Fill form' and tbtn(B).locator('.tt').inner_text() == '0:20', 'and starting a subtask stops the task\'s (task now 0:20)')
+    tick('2026-11-03T17:40:00Z')
+    tli(B).locator('ul.subtasks li', has_text='Fill form').locator('label').click(); tm.wait_for_timeout(500)
+    check(running() == [] and [e for e in ents() if e['title'] == 'Fill form'][0]['seconds'] == 600, 'checking off a subtask stops its timer')
+    tm.click('.tabs [data-view="time"]'); tm.wait_for_timeout(300)
+    tue = tday('Tuesday, Nov 3')
+    sub_rows = tue.locator('li.time-row.time-sub')
+    check(sub_rows.count() == 2 and tval('Tuesday, Nov 3', 'Gather receipts').inner_text() == '0:20' and tval('Tuesday, Nov 3', 'Fill form').inner_text() == '0:10'
+          and tue.locator('li.time-row:not(.time-sub)', has_text=B).locator('.time-val').inner_text() == '0:20',
+          'Time tab: subtasks listed under their task with their own times')
+    order = tue.locator('li.time-row').evaluate_all("els => els.map(e => e.querySelector('.time-title').textContent.replace('›','').trim())")
+    check(order.index(B) < order.index('Gather receipts') and order.index(B) < order.index('Fill form'), f'subtask lines sit right under their task: {order}')
+    check(tue.locator('.time-total').inner_text() == '2:20' and 'Week total 3:05' in tm.inner_text('.time-week-total'),
+          'day and week totals include subtask time')
+    tval('Tuesday, Nov 3', 'Gather receipts').click(); tm.fill('input[data-time-input]', '0:30'); tm.press('input[data-time-input]', 'Enter'); tm.wait_for_timeout(500)
+    sadj = [e for e in ents() if e['kind'] == 'adjust' and e.get('subtask_id')]
+    check(len(sadj) == 1 and sadj[0]['seconds'] == 600 and tval('Tuesday, Nov 3', 'Gather receipts').inner_text() == '0:30'
+          and tue.locator('li.time-row:not(.time-sub)', has_text=B).locator('.time-val').inner_text() == '0:20', 'correcting a subtask\'s time leaves its task\'s alone')
+    if not tm.evaluate("document.querySelector('.time-by-task').open"): tm.click('.time-by-task summary')
+    check(f'{B} › Gather receipts' in tm.inner_text('.time-by-task'), 'week totals list subtasks with their task')
+    tm.evaluate("document.dispatchEvent(new Event('visibilitychange'))"); tm.wait_for_timeout(900)  # a refresh
+    check(tm.evaluate("document.querySelector('.time-by-task').open"), '"By task" stays open through a refresh')
+    no_overflow(tm, 'Time tab with subtasks')
+    tm.screenshot(path=os.path.join(HERE, 'time-subs.png'), full_page=True)
+    tm.click('.tabs [data-view="today"]'); tm.wait_for_timeout(200)
+    no_overflow(tm, 'task list with subtask timers')
+
+    # Stops by itself at the end of work hours (work hours reset to 8:00-5:00, button 15/15, as earlier tests changed them).
+    db['user_settings'][0]['settings'].update(workEnd='17:00', extendPromptMinutes=15, extendVisibleMinutes=15, workExtension=None)
+    state['version'] += 1
+    tm.evaluate("document.dispatchEvent(new Event('visibilitychange'))"); tm.wait_for_timeout(1000)
+    tm.clock.set_fixed_time('2026-11-03T22:50:00Z')  # 16:50
+    tbtn(C).click(); tm.wait_for_timeout(400)
+    tm.clock.set_fixed_time('2026-11-03T23:01:00Z')  # 17:01
+    tm.evaluate("document.dispatchEvent(new Event('visibilitychange'))"); tm.wait_for_timeout(1200)
+    c1 = [e for e in ents() if e['title'] == C][-1]
+    check(running() == [] and c1['ended_at'] == '2026-11-03T23:00:00.000Z' and c1['seconds'] == 600
+          and 'end of work hours' in tm.inner_text('#toast'), f'still running at 5:00 PM: stopped at 5:00 PM exactly ({c1["ended_at"]})')
+    # App closed at the end of the day: stopped at 5:00, not when reopened.
+    tm.clock.set_fixed_time('2026-11-03T22:55:00Z')
+    tbtn(C).click(); tm.wait_for_timeout(400)
+    tm.close()
+    wd = open_page(browser, 400, 1000, '2026-11-04T14:00:00Z', 'time-next-morning')  # Wed 08:00
+    c2 = [e for e in ents() if e['title'] == C][-1]
+    check(running() == [] and c2['ended_at'] == '2026-11-03T23:00:00.000Z' and c2['seconds'] == 300,
+          'app closed overnight: the timer was stopped at 5:00 PM, not this morning')
+    # Started after hours: keeps running.
+    wd.clock.set_fixed_time('2026-11-04T23:30:00Z')  # Wed 17:30
+    wd.locator('li.task', has_text=C).first.locator('.timer-btn').click(); wd.wait_for_timeout(400)
+    wd.clock.set_fixed_time('2026-11-04T23:40:00Z')
+    wd.evaluate("document.dispatchEvent(new Event('visibilitychange'))"); wd.wait_for_timeout(1200)
+    check(len(running()) == 1, 'a timer started after work hours is not stopped straight away')
+    wd.click('#band .band-timer'); wd.wait_for_timeout(400)
+    check(running() == [], 'stop it from the header')
+    wd.close()
+
+    # Header and tabs stay pinned while scrolling.
+    pin = open_page(browser, 400, 640, '2026-11-03T16:00:00Z', 'pinned')
+    tall = pin.evaluate("document.documentElement.scrollHeight") > 640 * 1.5
+    pin.evaluate("window.scrollTo(0, document.documentElement.scrollHeight)"); pin.wait_for_timeout(300)
+    bar = pin.evaluate("""() => { const b = document.getElementById('band').getBoundingClientRect(), t = document.querySelector('.tabs').getBoundingClientRect();
+      return { bandTop: b.top, tabsBottom: t.bottom, scrolled: window.scrollY }; }""")
+    check(tall and bar['scrolled'] > 300 and abs(bar['bandTop']) < 1 and bar['tabsBottom'] < 160,
+          f'scrolled to the bottom: header and tabs still at the top ({bar})')
+    last = pin.locator('#view li.task').last
+    last.locator('[data-act="expand"]').click(); pin.wait_for_timeout(300)
+    pin.locator('#view li.task .editor input[data-field="title"]').focus(); pin.wait_for_timeout(300)
+    hidden = pin.evaluate("""() => { const i = document.activeElement.getBoundingClientRect(), t = document.querySelector('.topbar').getBoundingClientRect();
+      return i.top < t.bottom; }""")
+    check(not hidden, 'a field that gets the cursor is not hidden under the pinned bar')
+    pin.click('.tabs [data-view="calendar"]'); pin.wait_for_timeout(300)
+    check(pin.locator('.cal-grid').count() == 1, 'tabs work while scrolled down')
+    pin.click('.tabs [data-view="time"]'); pin.wait_for_timeout(200)
+    pin.evaluate("window.scrollTo(0, document.documentElement.scrollHeight)"); pin.wait_for_timeout(200)
+    check(abs(pin.evaluate("document.getElementById('band').getBoundingClientRect().top")) < 1, 'pinned on every tab')
+    no_overflow(pin, 'pinned bar')
+    pin.close()
+
+    # App list.
+    ap = open_page(browser, 400, 1400, '2026-11-03T16:00:00Z', 'app-list')  # Tue 10:00
+    def sec_titles(pg): return pg.eval_on_selector_all('#view > .section > h2', 'e => e.map(x => x.firstChild.textContent.trim())')
+    check('App' not in sec_titles(ap), 'no App section until something is in it')
+    ap.click('#add [data-ctx="app"]')
+    check(ap.get_attribute('#add [data-ctx="app"]', 'aria-pressed') == 'true' and not ap.locator('#add [data-daily]').is_visible(),
+          'add form: App next to Work and Home; Daily toggle hidden for App')
+    ap.fill('#add input[name=title]', 'Add CSV export to Time tab'); ap.press('#add input[name=title]', 'Enter'); ap.wait_for_timeout(300)
+    ap.fill('#add input[name=title]', 'Dark mode for print'); ap.press('#add input[name=title]', 'Enter'); ap.wait_for_timeout(300)
+    check(row('Add CSV export to Time tab')['context'] == 'app' and row('Add CSV export to Time tab')['repeat'] is None, 'saved in the App list')
+    order = sec_titles(ap)
+    check(order.index('App') > order.index('Work') and order.index('App') > order.index('Home'),
+          f'App section comes after Work and Home: {order}')
+    check(titles(ap, 'app') == ['Add CSV export to Time tab', 'Dark mode for print'], 'App tasks listed in their own section')
+    app_li = ap.locator('ul[data-list="app"] li.task').first
+    check(app_li.locator('.timer-btn').count() == 0, 'no timer on App tasks')
+    app_li.locator('[data-act="expand"]').click(); ap.wait_for_timeout(200)
+    ed = ap.locator('ul[data-list="app"] li.task').first
+    check(ed.locator('select[data-repeat]').count() == 0 and ed.locator('[data-act="ctx"][data-val="app"]').get_attribute('aria-pressed') == 'true'
+          and ed.locator('input[data-field="dueDate"]').count() == 1 and ed.locator('[data-act="status-toggle"]').count() == 1,
+          'editor: no Repeats; App selected; due date and status still there')
+    sb = ed.locator('[data-sub-new]'); sb.fill('Pick columns'); sb.press('Enter'); ap.wait_for_timeout(300)
+    ed = ap.locator('ul[data-list="app"] li.task').first
+    ed.locator('[data-act="collapse"]').click(); ap.wait_for_timeout(200)
+    check(ap.locator('ul[data-list="app"] li.task').first.locator('ul.subtasks li').count() == 1
+          and ap.locator('ul[data-list="app"] li.task').first.locator('ul.subtasks .timer-btn').count() == 0, 'subtasks work; no subtask timers either')
+    # Drag within App: move the first one down onto the bottom edge of the second.
+    ap.wait_for_timeout(1000)  # let the sync refresh from adding the subtask land first
+    ap.locator('ul[data-list="app"]').scroll_into_view_if_needed(); ap.wait_for_timeout(300)
+    src = ap.locator('ul[data-list="app"] > li', has_text='Add CSV export').locator('.drag')
+    dst = ap.locator('ul[data-list="app"] > li', has_text='Dark mode for print').locator('.row')
+    a_, b_ = boxes(ap, src, dst)
+    y1 = b_['y'] + b_['height'] - 3
+    ap.mouse.move(a_['x'] + 5, a_['y'] + 5); ap.mouse.down()
+    for i in range(40):
+        ap.mouse.move(a_['x'] + 5, a_['y'] + 5 + (y1 - a_['y'] - 5) * (i + 1) / 40); ap.wait_for_timeout(15)
+    ap.mouse.up(); ap.wait_for_timeout(600)
+    if ap.locator('#nest-dialog[open]').count(): ap.click('#nest-dialog [value="cancel"]')
+    check(titles(ap, 'app')[0] == 'Dark mode for print', f'drag to reorder within App: {titles(ap, "app")}')
+    # Moving a daily task with a running timer to App: repeat off, timer stopped.
+    d_li = ap.locator('ul[data-list="daily-work"] li.task', has_text='Review PRs')
+    d_li.locator('.check').click(); ap.wait_for_timeout(400)  # earlier tests ticked it for today: untick so it has a timer
+    d_li.locator('.row > .timer-btn').click(); ap.wait_for_timeout(300)
+    d_li.locator('[data-act="expand"]').click(); ap.wait_for_timeout(200)
+    ap.locator('li.task', has_text='Review PRs').locator('[data-act="ctx"][data-val="app"]').click(); ap.wait_for_timeout(500)
+    ci = row('Review PRs')
+    check(ci['context'] == 'app' and ci['repeat'] is None and not [e for e in db['time_entries'] if e['kind'] == 'timer' and e['ended_at'] is None],
+          'moving a daily task with a running timer to App: no longer repeats, timer stopped')
+    check('Review PRs' in titles(ap, 'app'), 'it now shows in App')
+    # Needs sorting offers App.
+    ap.click('#add [data-ctx="work"]')
+    db['tasks'].append({**row('Dark mode for print'), 'id': 'unsorted-1', 'title': 'Granola idea', 'context': None, 'sort_key': 1})
+    state['version'] += 1; ap.wait_for_timeout(1200)
+    ap.locator('li.task', has_text='Granola idea').locator('[data-act="classify"][data-val="app"]').click(); ap.wait_for_timeout(400)
+    check(row('Granola idea')['context'] == 'app', '"Which list?" on imported items includes App')
+    # Calendar and colour.
+    ap.locator('ul[data-list="app"] li', has_text='Add CSV export').locator('[data-act="expand"]').click(); ap.wait_for_timeout(200)
+    ap.locator('li.task', has_text='Add CSV export').locator('input[data-field="dueDate"]').fill('2026-11-06'); ap.wait_for_timeout(400)
+    ap.click('.tabs [data-view="calendar"]'); ap.click('[data-date="2026-11-06"]'); ap.wait_for_timeout(200)
+    check('Add CSV export to Time tab' in titles(ap, 'cal-app') and ap.locator('[data-date="2026-11-06"] .dots .ap').count() == 1,
+          'App tasks with dates show on the Calendar, with their own dot')
+    ap.click('.tabs [data-view="time"]'); ap.wait_for_timeout(200)
+    ap.click('[data-act="time-add"]'); ap.wait_for_timeout(200)
+    opts = ap.eval_on_selector_all('select[data-time-task] option', 'e => e.map(o => o.textContent)')
+    check(not any('CSV export' in o or 'Dark mode for print' in o for o in opts), 'App tasks are not offered for logging time')
+    ap.click('[data-act="time-cancel"]')
+    ap.click('.tabs [data-view="settings"]'); pick(ap, 'app', '#00aa00')
+    ap.click('#settings-form button[type=submit]'); ap.wait_for_timeout(500)
+    ap.click('.tabs [data-view="today"]'); ap.wait_for_timeout(300)
+    bar = ap.evaluate("getComputedStyle(document.querySelector('li.task.ctx-app')).borderLeftColor")
+    check(db['user_settings'][0]['settings']['colors'].get('app') == '#00AA00' and bar == 'rgb(0, 170, 0)', 'App colour in Settings')
+    no_overflow(ap, 'App list')
+    ap.close()
 
     browser.close()
 

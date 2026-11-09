@@ -65,3 +65,17 @@ test('which failures are retried', () => {
   assert.equal(isRetryable({ code: '22007' }), false);  // bad date
   assert.equal(isDuplicate({ code: '23505' }), true);
 });
+
+test('time entries queue alongside tasks without mixing them up', async () => {
+  const { applyEntryOutbox } = await import('../web/js/core/outbox.js');
+  let q = enqueue([], { kind: 'update', taskId: 'x', patch: { title: 'task x' } });
+  q = enqueue(q, { kind: 'insert', table: 'time_entries', taskId: 'x', row: { id: 'x', seconds: 0 } }); // same id, other table
+  q = enqueue(q, { kind: 'update', table: 'time_entries', taskId: 'x', patch: { seconds: 60 } });
+  assert.deepEqual(q.map((o) => `${o.table || 'tasks'}:${o.kind}`), ['tasks:update', 'time_entries:insert']);
+  assert.equal(q[1].row.seconds, 60);           // folded into its own insert
+  assert.deepEqual(q[0].patch, { title: 'task x' }); // the task update is untouched
+  assert.deepEqual(applyOutbox([{ id: 'x', title: 'a' }], {}, q).tasks, [{ id: 'x', title: 'task x' }]);
+  assert.deepEqual(applyEntryOutbox([], q), [{ id: 'x', seconds: 60 }]);
+  q = enqueue(q, { kind: 'delete', table: 'time_entries', taskId: 'x' });
+  assert.deepEqual(q.map((o) => `${o.table || 'tasks'}:${o.kind}`), ['tasks:update']); // never-sent entry cancelled; task op kept
+});

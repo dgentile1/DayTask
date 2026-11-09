@@ -1,7 +1,7 @@
 // Applies the user's theme (light / dark / match device) and custom colours to the page.
 import { themeVars } from './core/colors.js';
 
-const MANAGED_VARS = ['--work', '--on-work', '--work-text', '--home', '--on-home', '--home-text', '--daily', '--on-daily', '--daily-text', '--status',
+const MANAGED_VARS = ['--work', '--on-work', '--work-text', '--home', '--on-home', '--home-text', '--app', '--on-app', '--app-text', '--daily', '--on-daily', '--daily-text', '--status',
   '--flag', '--on-flag', '--today', '--danger', '--sort', '--soon', '--soon-bg'];
 const CACHE_KEY = 'daytask.lastTheme'; // so reopening the app shows your colours instantly
 const darkQuery = window.matchMedia('(prefers-color-scheme: dark)');

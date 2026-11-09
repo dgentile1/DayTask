@@ -94,6 +94,29 @@ export function subscribe(onChange, onStatus) {
   const channel = sb.channel('daytask-sync')
     .on('postgres_changes', { event: '*', schema: 'public', table: 'tasks' }, onChange)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'user_settings' }, onChange)
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'time_entries' }, onChange)
     .subscribe((status) => onStatus(status === 'SUBSCRIBED'));
   return () => sb.removeChannel(channel);
 }
+
+// ---------------------------------------------------------------- time entries
+const ENTRY_COLS = 'id,task_id,subtask_id,title,context,day,started_at,ended_at,seconds,kind';
+const entryFromRow = (r) => ({
+  id: r.id, taskId: r.task_id, subtaskId: r.subtask_id ?? null, title: r.title ?? '', context: r.context ?? null, day: r.day,
+  startedAt: r.started_at, endedAt: r.ended_at, seconds: Number(r.seconds) || 0, kind: r.kind,
+});
+const ENTRY_MAP = { id: 'id', taskId: 'task_id', subtaskId: 'subtask_id', title: 'title', context: 'context', day: 'day',
+  startedAt: 'started_at', endedAt: 'ended_at', seconds: 'seconds', kind: 'kind' };
+function entryRow(patch) {
+  const row = {};
+  for (const [k, v] of Object.entries(patch)) if (k in ENTRY_MAP) row[ENTRY_MAP[k]] = v;
+  return row;
+}
+/** Entries from `fromDay` on, plus any timer still running (whenever it started). */
+export async function loadEntries(fromDay) {
+  const rows = check(await sb.from('time_entries').select(ENTRY_COLS).or(`day.gte.${fromDay},ended_at.is.null`));
+  return rows.map(entryFromRow);
+}
+export async function insertEntry(entry) { check(await sb.from('time_entries').insert(entryRow(entry))); }
+export async function updateEntry(id, patch) { check(await sb.from('time_entries').update(entryRow(patch)).eq('id', id)); }
+export async function deleteEntry(id) { check(await sb.from('time_entries').delete().eq('id', id)); }

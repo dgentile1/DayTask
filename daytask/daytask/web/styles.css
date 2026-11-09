@@ -21,6 +21,9 @@
   --on-home: #FFFFFF;
   --on-flag: #FFFFFF;
   --today: #B4470F;
+  --app: #A3366F;
+  --app-text: #A3366F;
+  --on-app: #FFFFFF;
   --daily: #0F766E;
   --status: #475569;
   --daily-text: #0F766E;
@@ -40,7 +43,7 @@
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     --paper: #13181E; --surface: #1C232B; --ink: #E5EAEF; --muted: #9AA6B2; --line: #2F3944;
-    --work: #3F78BE; --home: #3A8C62; --sort: #8B6CC0; --flag: #F08A4B; --today: #F08A4B; --on-flag: #111111; --daily: #2BA59A; --daily-text: #5CCFC4; --on-daily: #111111; --status: #94A3B8; --danger: #F2766B;
+    --work: #3F78BE; --home: #3A8C62; --sort: #8B6CC0; --flag: #F08A4B; --today: #F08A4B; --on-flag: #111111; --app: #D45C9B; --app-text: #E58BBA; --on-app: #111111; --daily: #2BA59A; --daily-text: #5CCFC4; --on-daily: #111111; --status: #94A3B8; --danger: #F2766B;
     --work-text: #8AB4EA; --home-text: #74C79A;
     --soon: #E8B84A; --soon-bg: #2E2614;
     color-scheme: dark;
@@ -48,7 +51,7 @@
 }
 :root[data-theme="dark"] {
     --paper: #13181E; --surface: #1C232B; --ink: #E5EAEF; --muted: #9AA6B2; --line: #2F3944;
-    --work: #3F78BE; --home: #3A8C62; --sort: #8B6CC0; --flag: #F08A4B; --today: #F08A4B; --on-flag: #111111; --daily: #2BA59A; --daily-text: #5CCFC4; --on-daily: #111111; --status: #94A3B8; --danger: #F2766B;
+    --work: #3F78BE; --home: #3A8C62; --sort: #8B6CC0; --flag: #F08A4B; --today: #F08A4B; --on-flag: #111111; --app: #D45C9B; --app-text: #E58BBA; --on-app: #111111; --daily: #2BA59A; --daily-text: #5CCFC4; --on-daily: #111111; --status: #94A3B8; --danger: #F2766B;
     --work-text: #8AB4EA; --home-text: #74C79A;
     --soon: #E8B84A; --soon-bg: #2E2614;
     color-scheme: dark;
@@ -405,3 +408,74 @@ li.sub label { flex: 1; min-width: 0; }
 
 .toggle.status-toggle[aria-pressed="true"] { background: var(--status); border-color: var(--status); color: var(--surface); }
 .name-status .name-field:only-child { flex-basis: 100%; }
+
+/* Time tracking */
+.timer-btn {
+  flex: none; align-self: flex-start; display: inline-flex; align-items: center; gap: 4px;
+  border: 1px solid var(--line); background: var(--surface); color: var(--muted);
+  border-radius: 999px; padding: 1px 8px; font-size: .78rem; font-variant-numeric: tabular-nums; margin-top: 1px;
+}
+.timer-btn .ti { font-size: .7rem; }
+.timer-btn:hover { color: var(--ink); border-color: var(--ink); }
+.timer-btn.running { background: var(--danger); border-color: var(--danger); color: #fff; }
+.band .band-timer {
+  display: inline-flex; align-items: center; gap: 5px; max-width: 58vw; border: 0; border-radius: 999px;
+  background: var(--paper); color: var(--ink); padding: 2px 9px; font-size: .78rem; font-weight: 700; font-variant-numeric: tabular-nums;
+}
+.band .band-timer .bt-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 22ch; font-weight: 400; }
+.time-panel { margin-bottom: 4px; }
+.time-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.time-head h2 { margin: 0; font-size: 1.1rem; }
+.time-head .nav { display: flex; gap: 6px; }
+.time-head .nav button:disabled { opacity: .4; }
+.time-week-total { margin: 0; font-size: 1rem; }
+.time-by-task summary { cursor: pointer; color: var(--muted); font-size: .9rem; }
+.time-by-task ul, .time-list { list-style: none; margin: 6px 0 0; padding: 0; display: grid; gap: 2px; }
+.time-by-task li { display: flex; justify-content: space-between; gap: 10px; font-size: .92rem; font-variant-numeric: tabular-nums; }
+.time-day { margin: 10px 14px 0; padding: 10px 12px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); }
+.time-day.today { border-color: var(--work-text); }
+.time-day h3 { margin: 0 0 6px; font-size: .95rem; display: flex; justify-content: space-between; gap: 10px; }
+.time-day .time-total { font-variant-numeric: tabular-nums; }
+.time-day .empty { margin: 0 0 4px; font-size: .9rem; }
+.time-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 30px; }
+.time-title { display: flex; align-items: center; gap: 6px; min-width: 0; overflow-wrap: anywhere; }
+.ctx-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--sort); }
+.ctx-dot.ctx-work { background: var(--work); } .ctx-dot.ctx-home { background: var(--home); }
+.time-val { flex: none; border: 1px solid transparent; background: none; border-radius: var(--radius); padding: 2px 6px; font-variant-numeric: tabular-nums; text-decoration: underline dotted; text-underline-offset: 3px; }
+.time-val:hover { border-color: var(--line); }
+.time-row.running .time-val { color: var(--danger); font-weight: 700; }
+.time-edit, .time-add { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.time-edit input { width: 80px; padding: 4px 8px; }
+.time-add { margin-top: 6px; }
+.time-add select { flex: 1 1 150px; min-width: 0; background: var(--paper); border: 1px solid var(--line); border-radius: var(--radius); padding: 6px 8px; }
+.time-add input { width: 80px; padding: 5px 8px; }
+.time-day .link { padding-left: 0; font-size: .9rem; }
+.tabs button { padding-left: 2px; padding-right: 2px; }
+
+/* Subtask timers */
+.timer-btn.sub-timer { padding: 0 7px; font-size: .74rem; margin-top: 2px; }
+li.sub .timer-btn { align-self: flex-start; }
+.time-row.time-sub { padding-left: 14px; }
+.time-row.time-sub .time-title { color: var(--muted); }
+.sub-mark { color: var(--muted); }
+.time-none { color: var(--muted); padding: 2px 6px; }
+
+/* Header and tabs stay pinned at the top while the page scrolls */
+.topbar { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 30; }
+.topbar .tabs { box-shadow: 0 1px 0 var(--line); }
+/* Phones that draw under the status bar: fill that strip with the header colour */
+body::before {
+  content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 31;
+  background: var(--work);
+}
+body.mode-home::before { background: var(--home); }
+/* Jumping to a task or a field lands below the pinned bar, not under it */
+html { scroll-padding-top: calc(env(safe-area-inset-top, 0px) + var(--topbar-h, 112px) + 8px); }
+
+/* App list */
+.task.ctx-app { border-left-color: var(--app); }
+.meta .ctx-app { color: var(--app-text); }
+.seg button[aria-pressed="true"][data-ctx="app"], .seg button[aria-pressed="true"][data-val="app"] { background: var(--app); color: var(--on-app); }
+.classify button[data-val="app"] { color: var(--app-text); border-color: var(--app-text); }
+.dots .ap { background: var(--app); }
+.ctx-dot.ctx-app { background: var(--app); }

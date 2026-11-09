@@ -7,8 +7,12 @@
 //   { kind: 'delete',   taskId }
 //   { kind: 'settings', settings }               whole settings object
 //   { kind: 'import',   fingerprint, taskId }    Granola de-duplication log
+// insert / update / delete may carry table: 'time_entries' (taskId then holds the entry's id);
+// without it they're for tasks.
 
 let counter = 0;
+const tableOf = (o) => o.table || 'tasks';
+const sameTarget = (a, b) => tableOf(a) === tableOf(b) && a.taskId === b.taskId;
 export const newOpId = () => `op-${Date.now().toString(36)}-${(counter++).toString(36)}`;
 
 /**
@@ -24,7 +28,7 @@ export function enqueue(queue, op, lockedOpId = null) {
     // Fold into the latest unsent insert/update of the same task, if nothing for it is locked after.
     for (let i = q.length - 1; i >= 0; i--) {
       const o = q[i];
-      if (o.taskId !== op.taskId || (o.kind !== 'insert' && o.kind !== 'update' && o.kind !== 'delete')) continue;
+      if (!sameTarget(o, op) || (o.kind !== 'insert' && o.kind !== 'update' && o.kind !== 'delete')) continue;
       if (!editable(o) || o.kind === 'delete') break;
       if (o.kind === 'insert') { q[i] = { ...o, row: { ...o.row, ...op.patch } }; return q; }
       q[i] = { ...o, patch: { ...o.patch, ...op.patch } };
@@ -35,12 +39,12 @@ export function enqueue(queue, op, lockedOpId = null) {
 
   if (op.kind === 'delete') {
     // Never sent at all? Then drop every queued op for it and send nothing.
-    const insertIdx = q.findIndex((o) => o.kind === 'insert' && o.taskId === op.taskId);
+    const insertIdx = q.findIndex((o) => o.kind === 'insert' && sameTarget(o, op));
     if (insertIdx !== -1 && editable(q[insertIdx])) {
-      return q.filter((o) => !(o.taskId === op.taskId && editable(o)));
+      return q.filter((o) => !(sameTarget(o, op) && (o.kind === 'insert' || o.kind === 'update' || o.kind === 'delete') && editable(o)));
     }
     // Otherwise unsent updates are pointless: drop them, then delete.
-    return [...q.filter((o) => !(o.kind === 'update' && o.taskId === op.taskId && editable(o))), withId];
+    return [...q.filter((o) => !(o.kind === 'update' && sameTarget(o, op) && editable(o))), withId];
   }
 
   if (op.kind === 'settings') {
@@ -56,6 +60,7 @@ export function applyOutbox(tasks, settings, queue) {
   let list = tasks.map((t) => ({ ...t }));
   let s = settings;
   for (const o of queue) {
+    if (o.table && o.table !== 'tasks') continue;
     if (o.kind === 'insert') {
       if (!list.some((t) => t.id === o.taskId)) list.push({ ...o.row });
     } else if (o.kind === 'update') {
@@ -88,3 +93,15 @@ export function isPermanent(err) {
 
 /** Inserting a task that already exists: an earlier attempt got through but the reply was lost. */
 export const isDuplicate = (err) => String(err?.code || '') === '23505';
+
+/** Queued time-entry changes on top of fetched entries. */
+export function applyEntryOutbox(entries, queue) {
+  let list = entries.map((e) => ({ ...e }));
+  for (const o of queue) {
+    if (o.table !== 'time_entries') continue;
+    if (o.kind === 'insert') { if (!list.some((e) => e.id === o.taskId)) list.push({ ...o.row }); }
+    else if (o.kind === 'update') { const e = list.find((x) => x.id === o.taskId); if (e) Object.assign(e, o.patch); }
+    else if (o.kind === 'delete') list = list.filter((e) => e.id !== o.taskId);
+  }
+  return list;
+}

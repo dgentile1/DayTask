@@ -23,16 +23,22 @@ class Quiet(SimpleHTTPRequestHandler):
 server = ThreadingHTTPServer(('127.0.0.1', PORT), functools.partial(Quiet, directory=SITE))
 threading.Thread(target=server.serve_forever, daemon=True).start()
 
-db = {'tasks': [], 'user_settings': [], 'import_log': []}
+db = {'tasks': [], 'user_settings': [], 'import_log': [], 'time_entries': []}
 state = {'version': 0}
 
 def matches(row, f):
     for flt in f:
         if flt[0] == 'eq' and str(row.get(flt[1])) != str(flt[2]): return False
         if flt[0] == 'in' and row.get(flt[1]) not in flt[2]: return False
-        if flt[0] == 'or':
-            m = re.match(r'completed_at\.is\.null,completed_on\.eq\.(.+)', flt[1])
-            if not (row.get('completed_at') is None or row.get('completed_on') == m.group(1)): return False
+        if flt[0] == 'or':  # PostgREST "a.op.v,b.op.v": any clause matching is enough
+            def clause(c):
+                col, op, val = c.split('.', 2)
+                v = row.get(col)
+                if op == 'is': return v is None
+                if op == 'eq': return str(v) == val
+                if op == 'gte': return v is not None and str(v) >= val
+                return False
+            if not any(clause(c) for c in flt[1].split(',')): return False
     return True
 
 def handle(raw):
@@ -43,6 +49,11 @@ def handle(raw):
         out = sorted([r for r in t if matches(r, p['f'])], key=lambda r: r.get('sort_key', 0))
         if p['limit']: out = out[:p['limit']]
     elif a == 'insert':
+        if p['t'] == 'time_entries':
+            if any(r['id'] == p['payload'].get('id') for r in t):
+                return json.dumps({'data': None, 'error': {'message': 'duplicate key', 'code': '23505'}})
+            t.append(dict(p['payload'])); state['version'] += 1
+            return json.dumps({'data': None, 'error': None})
         if any(r['id'] == p['payload'].get('id') for r in t):
             return json.dumps({'data': None, 'error': {'message': 'duplicate key', 'code': '23505'}})
         row = {'id': str(uuid.uuid4()), 'note': '', 'priority': 'normal', 'context': None, 'completed_at': None,

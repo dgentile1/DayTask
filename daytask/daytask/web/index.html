@@ -27,13 +27,16 @@
   </div>
 
   <div id="app" hidden>
+    <div class="topbar">
     <header id="band" class="band"></header>
     <nav class="tabs" aria-label="Views">
       <button data-view="today" aria-current="page">Tasks</button>
       <button data-view="calendar">Calendar</button>
+      <button data-view="time">Time</button>
       <button data-view="import">Import</button>
       <button data-view="settings">Settings</button>
     </nav>
+    </div>
 
     <form id="add" class="add" autocomplete="off">
       <div class="add-main">
@@ -45,6 +48,7 @@
         <div class="seg" role="group" aria-label="List">
           <button type="button" data-ctx="work">Work</button>
           <button type="button" data-ctx="home">Home</button>
+          <button type="button" data-ctx="app" title="Ideas and updates for this app">App</button>
         </div>
         <button type="button" class="toggle" data-prio aria-pressed="false">High priority</button>
         <button type="button" class="toggle daily-toggle" data-daily aria-pressed="false" title="Repeats every day: goes in the Daily section">Daily</button>
