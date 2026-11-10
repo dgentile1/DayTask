@@ -111,7 +111,7 @@ daytask/
 
 ### 1. Supabase (free)
 1. Create a project at supabase.com with a personal account.
-2. SQL Editor, New query: paste `supabase/schema.sql`, Run.
+2. SQL Editor, New query: paste code in file `supabase/schema.sql`, Run.
 3. Authentication, Users, Add user: your email and a password (tick auto-confirm).
 4. Authentication settings: turn off new sign-ups so no one else can register.
 5. Project Settings, API: copy the Project URL and the anon public key.
