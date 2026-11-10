@@ -10,6 +10,8 @@
     <AssemblyName>DayTask</AssemblyName>
     <RootNamespace>DayTask.Desktop</RootNamespace>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <!-- Same artwork as the web app (icon.svg); icon.ico is rendered from it. -->
+    <ApplicationIcon>icon.ico</ApplicationIcon>
     <!-- The WebView2 package references its WPF assembly even in a WinForms-only app;
          it was built against WindowsBase 5.0.0.0 and net10.0 ships 4.0.0.0. Harmless. -->
     <MSBuildWarningsAsMessages>MSB3277</MSBuildWarningsAsMessages>
@@ -21,6 +23,9 @@
 
   <ItemGroup>
     <None Update="desktop.json" CopyToOutputDirectory="PreserveNewest" />
+    <!-- ApplicationIcon covers the exe and taskbar; the window and tray read this copy so they
+         can pick the frame that matches the size they need. -->
+    <EmbeddedResource Include="icon.ico" LogicalName="DayTask.Desktop.icon.ico" />
   </ItemGroup>
 
 </Project>

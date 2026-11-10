@@ -26,6 +26,7 @@ internal sealed class MainForm : Form
     public MainForm()
     {
         Text = "DayTask";
+        Icon = AppIcon(null);
         MinimumSize = new Size(320, 420);
         StartPosition = FormStartPosition.Manual;
         Bounds = InitialBounds();
@@ -37,7 +38,7 @@ internal sealed class MainForm : Form
 
         // Tray icon: carries the daily due-date notification and brings the window back.
         // Right-click: Always on top / Show DayTask / Exit.
-        _tray.Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath) ?? SystemIcons.Application;
+        _tray.Icon = AppIcon(SystemInformation.SmallIconSize);
         _tray.BalloonTipClicked += (_, _) => ShowWindow();
         _tray.DoubleClick += (_, _) => ShowWindow();
         _topMenuItem.Checked = TopMost;
@@ -68,6 +69,17 @@ internal sealed class MainForm : Form
         // 0-high window (title bar only), not "no limit" — use the tallest the desktop can be.
         MaximumSize = new Size(maxWidth, SystemInformation.VirtualScreen.Height);
         if (Width > maxWidth) Width = maxWidth;
+    }
+
+    /// <summary>
+    /// The app icon, shared with the web app (icon.svg — rendered to icon.ico). Pass the size the
+    /// caller needs so the matching frame is used rather than a resize of the wrong one.
+    /// </summary>
+    private static Icon AppIcon(Size? size)
+    {
+        using var stream = typeof(MainForm).Assembly.GetManifestResourceStream("DayTask.Desktop.icon.ico");
+        if (stream is null) return SystemIcons.Application; // resource dropped from the build
+        return size is { } s ? new Icon(stream, s) : new Icon(stream);
     }
 
     private Rectangle InitialBounds()
