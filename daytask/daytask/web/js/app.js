@@ -717,7 +717,7 @@ function editor(t) {
       </div>
       <div class="sub-editor">
         <div class="sub-editor-head">Subtasks</div>
-        ${(t.subtasks || []).some((x) => x.dueDate) ? '<p class="sub-hint">Kept in due-date order, next one first. Drag to arrange subtasks that share a date.</p>' : ''}
+        ${(t.subtasks || []).some((x) => x.dueDate) ? '<p class="sub-hint">A due date slots a subtask in by date; drag to put them in any order.</p>' : ''}
         ${(t.subtasks || []).length ? `<ul class="sub-edit-list" data-for="${esc(t.id)}">${(isDaily(t) ? dailySubtasks(t, state.sched.today) : t.subtasks).map((s) => `
           <li class="sub-edit${s.done ? ' done' : ''}" data-sub="${esc(s.id)}" data-group="${esc(subtaskGroup(s))}">
             <span class="sub-drag" aria-hidden="true" title="Drag to reorder">⋮⋮</span>

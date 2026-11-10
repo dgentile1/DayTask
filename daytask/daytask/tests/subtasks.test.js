@@ -15,7 +15,8 @@ test('add, check, rename, remove, reorder, progress', () => {
   assert.deepEqual(subtaskProgress(l), { done: 1, total: 2, allDone: false });
   l = renameSubtask(l, b.id, 'Flash both units');
   l = renameSubtask(l, b.id, ''); // blank rename keeps the old title
-  assert.equal(l[1].title, 'Flash both units');
+  assert.equal(l.find((s) => s.id === b.id).title, 'Flash both units');
+  assert.deepEqual(l.map((s) => s.id), [b.id, a.id]); // a (checked off) dropped to the bottom
   l = reorderSubtasks(l, [b.id, a.id]);
   assert.deepEqual(l.map((s) => s.id), [b.id, a.id]);
   l = setSubtaskDone(l, b.id, true);
@@ -74,26 +75,33 @@ test('dropping a task onto another: becomes subtasks, note kept', async () => {
   assert.equal(add([], 'x', { dueDate: 'bad' })[0].dueDate, null);
 });
 
-test('subtasks stay in date order; same-date items keep manual order', async () => {
+test('dates place a subtask when set; after that your order wins', async () => {
   const { sortSubtasks, subtaskGroup, updateSubtask, setSubtaskDone, reorderSubtasks } = await import('../web/js/core/subtasks.js');
   const names = (l) => l.map((s) => s.title);
   let l = ['File form', 'Emissions test', 'Pay fee'].reduce((acc, t) => addSubtask(acc, t), []);
   const id = (t) => l.find((s) => s.title === t).id;
-  l = sortSubtasks(updateSubtask(l, id('Pay fee'), { dueDate: '2026-12-05' }));
-  assert.deepEqual(names(l), ['Pay fee', 'File form', 'Emissions test']); // dated before undated
-  l = sortSubtasks(updateSubtask(l, id('File form'), { dueDate: '2026-12-01' }));
-  assert.deepEqual(names(l), ['File form', 'Pay fee', 'Emissions test']); // earliest first
-  l = sortSubtasks(updateSubtask(l, id('Emissions test'), { dueDate: '2026-12-01' }));
-  assert.deepEqual(names(l), ['File form', 'Emissions test', 'Pay fee']); // joins its date after existing ones
-  l = sortSubtasks(reorderSubtasks(l, [id('Emissions test'), id('File form'), id('Pay fee')]));
-  assert.deepEqual(names(l), ['Emissions test', 'File form', 'Pay fee']); // manual order within a date sticks
-  l = sortSubtasks(reorderSubtasks(l, [id('Pay fee'), id('Emissions test'), id('File form')]));
-  assert.deepEqual(names(l), ['Emissions test', 'File form', 'Pay fee']); // can't jump ahead of an earlier date
-  l = sortSubtasks(setSubtaskDone(l, id('Emissions test'), true));
-  assert.deepEqual(names(l), ['File form', 'Pay fee', 'Emissions test']); // done drops to the bottom
-  l = sortSubtasks(setSubtaskDone(l, id('Emissions test'), false));
-  assert.deepEqual(names(l), ['File form', 'Emissions test', 'Pay fee']); // unchecked: back with its date
-  assert.deepEqual(l.map(subtaskGroup), ['2026-12-01', '2026-12-01', '2026-12-05']);
+  assert.deepEqual(names(l), ['File form', 'Emissions test', 'Pay fee']);                       // added in order
+  l = updateSubtask(l, id('Pay fee'), { dueDate: '2026-12-05' });
+  assert.deepEqual(names(l), ['Pay fee', 'File form', 'Emissions test']);                       // dated: ahead of undated
+  l = updateSubtask(l, id('File form'), { dueDate: '2026-12-01' });
+  assert.deepEqual(names(l), ['File form', 'Pay fee', 'Emissions test']);                       // earlier date: ahead of later
+  l = updateSubtask(l, id('Emissions test'), { dueDate: '2026-12-01' });
+  assert.deepEqual(names(l), ['File form', 'Emissions test', 'Pay fee']);                       // same date: after the others
+  l = sortSubtasks(reorderSubtasks(l, [id('Pay fee'), id('File form'), id('Emissions test')]));
+  assert.deepEqual(names(l), ['Pay fee', 'File form', 'Emissions test']);                       // drag a later date to the top: stays
+  l = addSubtask(l, 'Call DMV');
+  l = sortSubtasks(reorderSubtasks(l, [id('Call DMV') ?? l[3].id, ...l.filter((s) => s.title !== 'Call DMV').map((s) => s.id)].filter(Boolean)));
+  l = sortSubtasks(reorderSubtasks(l, [l.find((s) => s.title === 'Call DMV').id, ...l.filter((s) => s.title !== 'Call DMV').map((s) => s.id)]));
+  assert.deepEqual(names(l), ['Call DMV', 'Pay fee', 'File form', 'Emissions test']);           // undated above dated: stays
+  l = updateSubtask(l, l[0].id, { priority: 'high' });
+  assert.deepEqual(names(l), ['Call DMV', 'Pay fee', 'File form', 'Emissions test']);           // other edits don't move anything
+  l = setSubtaskDone(l, id('File form'), true);
+  assert.deepEqual(names(l), ['Call DMV', 'Pay fee', 'Emissions test', 'File form']);           // done: to the bottom
+  l = setSubtaskDone(l, id('File form'), false);
+  assert.deepEqual(names(l), ['File form', 'Call DMV', 'Pay fee', 'Emissions test']);           // unchecked: slots in by date
+  l = updateSubtask(l, id('Pay fee'), { dueDate: null });
+  assert.deepEqual(names(l), ['File form', 'Call DMV', 'Pay fee', 'Emissions test']);           // clearing a date: stays put
+  assert.deepEqual([...new Set(l.map(subtaskGroup))], ['open']);
 });
 
 test('statuses on tasks and subtasks', async () => {

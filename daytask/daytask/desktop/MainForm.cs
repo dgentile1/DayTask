@@ -16,6 +16,12 @@ internal sealed class MainForm : Form
     private readonly DesktopState _state = DesktopState.Load();
     private readonly string _appUrl = DesktopConfig.LoadAppUrl();
     private readonly NotifyIcon _tray = new() { Text = "DayTask", Visible = true };
+    private readonly ToolStripMenuItem _topMenuItem = new("Always on top");
+
+    // The page's content is at most 640px wide (#app in web/styles.css); the window may be
+    // at most this much wider, so it never opens up empty space beside the list.
+    private const int ContentMaxWidth = 640;
+    private const int ExtraWidth = 16;
 
     public MainForm()
     {
@@ -26,15 +32,42 @@ internal sealed class MainForm : Form
         TopMost = _state.TopMost;
         UpdateTitle();
         Controls.Add(_web);
+        ApplyMaxWidth();
+        DpiChanged += (_, _) => ApplyMaxWidth(); // moved to a screen with different scaling
 
         // Tray icon: carries the daily due-date notification and brings the window back.
+        // Right-click: Always on top / Show DayTask / Exit.
         _tray.Icon = Icon.ExtractAssociatedIcon(Application.ExecutablePath) ?? SystemIcons.Application;
         _tray.BalloonTipClicked += (_, _) => ShowWindow();
         _tray.DoubleClick += (_, _) => ShowWindow();
+        _topMenuItem.Checked = TopMost;
+        _topMenuItem.Click += (_, _) => SetTopMost(!TopMost);
+        var menu = new ContextMenuStrip();
+        menu.Items.Add(_topMenuItem);
+        menu.Items.Add("Show DayTask", null, (_, _) => ShowWindow());
+        menu.Items.Add(new ToolStripSeparator());
+        menu.Items.Add("Exit", null, (_, _) => Close());
+        _tray.ContextMenuStrip = menu;
         FormClosed += (_, _) => _tray.Dispose();
 
+        Load += (_, _) => ApplyMaxWidth(); // again once the real window (and its scaling) exists
         Load += async (_, _) => await InitWebViewAsync();
         FormClosing += (_, _) => SaveBounds();
+    }
+
+    /// <summary>
+    /// Cap the window width at the content's maximum width plus a little, at this screen's
+    /// scaling. Height is left effectively unlimited. Also applies when maximized.
+    /// </summary>
+    private void ApplyMaxWidth()
+    {
+        var scale = DeviceDpi / 96f;
+        var frame = Width - ClientSize.Width; // borders around the page
+        var maxWidth = (int)Math.Ceiling((ContentMaxWidth + ExtraWidth) * scale) + frame;
+        // WinForms clamps the window against MaximumSize as a whole, so a 0 here is a
+        // 0-high window (title bar only), not "no limit" — use the tallest the desktop can be.
+        MaximumSize = new Size(maxWidth, SystemInformation.VirtualScreen.Height);
+        if (Width > maxWidth) Width = maxWidth;
     }
 
     private Rectangle InitialBounds()
@@ -70,7 +103,16 @@ internal sealed class MainForm : Form
         var core = _web.CoreWebView2;
         core.WebMessageReceived += OnWebMessage;
         core.NavigationCompleted += OnNavigationCompleted;
-        core.AcceleratorKeyPressed += OnAcceleratorKey;
+        // Ctrl+Shift+T toggles always-on-top. The WinForms wrapper doesn't surface
+        // CoreWebView2Controller.AcceleratorKeyPressed, so the page reports the key instead.
+        await core.AddScriptToExecuteOnDocumentCreatedAsync("""
+            addEventListener('keydown', e => {
+                if (e.ctrlKey && e.shiftKey && e.code === 'KeyT') {
+                    e.preventDefault();
+                    chrome.webview.postMessage({ type: 'toggleTopMost' });
+                }
+            }, true);
+            """);
         core.NewWindowRequested += (_, e) =>
         {
             e.Handled = true; // open links in the normal browser, not a second WebView window
@@ -113,21 +155,10 @@ internal sealed class MainForm : Form
         catch (JsonException) { /* ignore malformed messages */ }
     }
 
-    private void OnAcceleratorKey(object? sender, CoreWebView2AcceleratorKeyPressedEventArgs e)
-    {
-        // Ctrl+Shift+T toggles always-on-top even while the web view has focus.
-        if (e.KeyEventKind == CoreWebView2KeyEventKind.KeyDown &&
-            e.VirtualKey == (uint)Keys.T &&
-            (ModifierKeys & (Keys.Control | Keys.Shift)) == (Keys.Control | Keys.Shift))
-        {
-            e.Handled = true;
-            SetTopMost(!TopMost);
-        }
-    }
-
     private void SetTopMost(bool value)
     {
         TopMost = value;
+        _topMenuItem.Checked = value;
         _state.TopMost = value;
         _state.Save();
         UpdateTitle();

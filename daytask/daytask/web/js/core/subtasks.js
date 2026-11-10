@@ -30,15 +30,20 @@ export function normalizeSubtasks(list) {
 export function addSubtask(list, title, { dueDate = null, priority = 'normal' } = {}) {
   const t = String(title || '').trim();
   if (!t) return list;
-  return [...list, {
-    id: newId(), title: t.slice(0, 500), done: false,
+  const id = newId();
+  return placeByDate([...list, {
+    id, title: t.slice(0, 500), done: false,
     dueDate: YMD.test(dueDate ?? '') ? dueDate : null,
     priority: priority === 'high' ? 'high' : 'normal',
     status: null,
-  }];
+  }], id);
 }
 
-export const setSubtaskDone = (list, id, done) => list.map((s) => (s.id === id ? { ...s, done: !!done } : s));
+/** Checked off: drops to the bottom. Unchecked: slots back in by its due date. */
+export function setSubtaskDone(list, id, done) {
+  const next = list.map((s) => (s.id === id ? { ...s, done: !!done } : s));
+  return done ? sortSubtasks(next) : placeByDate(next, id);
+}
 
 export function renameSubtask(list, id, title) {
   const t = String(title || '').trim();
@@ -62,7 +67,8 @@ export function subtaskProgress(list) {
 
 /** Set a subtask's due date (YYYY-MM-DD, or null/'' to clear), priority and/or status. */
 export function updateSubtask(list, id, { dueDate, priority, status } = {}) {
-  return list.map((s) => {
+  const before = list.find((s) => s.id === id);
+  const next = list.map((s) => {
     if (s.id !== id) return s;
     const next = { ...s };
     if (dueDate !== undefined) next.dueDate = YMD.test(dueDate ?? '') ? dueDate : null;
@@ -70,27 +76,43 @@ export function updateSubtask(list, id, { dueDate, priority, status } = {}) {
     if (status !== undefined) next.status = cleanStatus(status);
     return next;
   });
+  // A date set or changed slots it in by date; anything else (or clearing a date) leaves it where it is.
+  const after = next.find((s) => s.id === id);
+  return after && after.dueDate && after.dueDate !== before?.dueDate ? placeByDate(next, id) : next;
 }
 
 const NO_DATE = '9999-12-31';
 
 /** Which ordering group a subtask belongs to: its due date, 'none' (undated) or 'done'. */
-export const subtaskGroup = (s) => (s.done ? 'done' : s.dueDate || 'none');
+/** Drag groups: open subtasks can be arranged freely among themselves; checked-off ones stay below. */
+export const subtaskGroup = (s) => (s.done ? 'done' : 'open');
 
 /**
- * The order subtasks are kept in: open ones by due date (earliest first, undated last),
- * then checked-off ones. Within the same date (and among undated or done ones) the
- * existing order is kept, so that's where your manual dragging applies.
+ * The order subtasks are kept in: your order, with checked-off ones moved to the bottom.
+ * Due dates only decide where a subtask lands when a date is set or it's unchecked
+ * (see placeByDate); after that your dragging wins.
  */
 export function sortSubtasks(list) {
-  return (list || [])
-    .map((s, i) => [s, i])
-    .sort(([a, i], [b, j]) => {
-      if (a.done !== b.done) return a.done ? 1 : -1;
-      if (a.done) return i - j;
-      return (a.dueDate || NO_DATE).localeCompare(b.dueDate || NO_DATE) || i - j;
-    })
-    .map(([s]) => s);
+  const l = list || [];
+  return [...l.filter((s) => !s.done), ...l.filter((s) => s.done)];
+}
+
+/**
+ * Put subtask `id` where its due date says among the open ones: before the first open
+ * subtask that's due later or has no date (so after any due the same day). Without a
+ * date it goes after the open ones. Everything else keeps its place.
+ */
+export function placeByDate(list, id) {
+  const item = list.find((s) => s.id === id);
+  if (!item || item.done) return sortSubtasks(list);
+  const rest = sortSubtasks(list.filter((s) => s.id !== id));
+  const openCount = rest.filter((s) => !s.done).length;
+  let at = openCount;
+  if (item.dueDate) {
+    const i = rest.findIndex((s) => !s.done && (!s.dueDate || s.dueDate > item.dueDate));
+    if (i !== -1) at = i;
+  }
+  return [...rest.slice(0, at), item, ...rest.slice(at)];
 }
 
 /** The next subtask to finish that has a due date (the first dated one in list order), or null. */

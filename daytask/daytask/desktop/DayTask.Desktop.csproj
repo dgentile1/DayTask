@@ -10,6 +10,9 @@
     <AssemblyName>DayTask</AssemblyName>
     <RootNamespace>DayTask.Desktop</RootNamespace>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <!-- The WebView2 package references its WPF assembly even in a WinForms-only app;
+         it was built against WindowsBase 5.0.0.0 and net10.0 ships 4.0.0.0. Harmless. -->
+    <MSBuildWarningsAsMessages>MSB3277</MSBuildWarningsAsMessages>
   </PropertyGroup>
 
   <ItemGroup>
