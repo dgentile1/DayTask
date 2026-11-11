@@ -18,7 +18,7 @@ export const host = {
   setMaxWidth(px) { wv?.postMessage({ type: 'setMaxWidth', value: Math.round(px) }); },
   /** Windows notification from the desktop shell. */
   notify(title, body) { wv?.postMessage({ type: 'notify', title, body }); },
-  /** handlers: { topMost(bool), maxWidth({value,min,max,default}), granolaNotes({text,title,date}) } */
+  /** handlers: { topMost(bool), maxWidth({value,min,max,default}), shell({version}), granolaNotes({text,title,date}) } */
   listen(handlers) {
     if (!wv) return;
     wv.addEventListener('message', (e) => {
@@ -29,6 +29,7 @@ export const host = {
         try { localStorage.setItem(WIDTH_KEY, String(m.value)); } catch { /* storage blocked */ }
         handlers.maxWidth?.(m);
       }
+      if (m.type === 'shell') handlers.shell?.(m);
       if (m.type === 'granolaNotes') handlers.granolaNotes?.(m);
     });
     wv.postMessage({ type: 'hello' });

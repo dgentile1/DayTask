@@ -17,6 +17,7 @@ const FILES = [
   'js/app.js',
   'js/host.js',
   'js/theme.js',
+  'js/version.js',
   'js/core/colors.js',
   'js/core/daily.js',
   'js/core/dates.js',

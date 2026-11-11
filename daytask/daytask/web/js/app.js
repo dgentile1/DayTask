@@ -10,6 +10,7 @@ import {
 } from './core/subtasks.js';
 import { runGranolaImport } from './integrations/granola/importer.js';
 import { host } from './host.js';
+import { WEB_VERSION } from './version.js';
 import { applyTheme, applyCachedTheme, activeTheme, onThemeChange } from './theme.js';
 import { isDaily, dailyDoneToday, dailySubtasks, defaultRepeat } from './core/daily.js';
 import {
@@ -33,6 +34,7 @@ const state = {
   sync: sync.status(),
   topMost: false,
   desktopWidth: null,   // { value, min, max, default } from the desktop shell; null on phone/browser
+  shellVersion: null,   // desktop shell build, e.g. "1.1.0 (abc1234)"; null on phone/browser
   cal: { year: 0, month0: 0, selected: null },
   addCtx: null,
   addPrio: 'normal',
@@ -1135,6 +1137,12 @@ function settingsHtml() {
     <div><button type="button" class="plain" data-act="color-reset-all">Reset all colors</button></div>
     <h2>Account</h2>
     <div><button type="button" class="plain" data-act="signout">Sign out</button></div>
+    <h2>About</h2>
+    <dl class="about">
+      <dt>Web app</dt><dd>${esc(WEB_VERSION)}</dd>
+      ${host.available ? `<dt>Desktop app</dt><dd>${esc(state.shellVersion || 'older than 1.1.0')}</dd>` : ''}
+      <dt>Loaded from</dt><dd>${esc(location.host)}</dd>
+    </dl>
     <div class="settings-save"><button class="primary" type="submit">Save settings</button></div>
   </form>`;
 }
@@ -1802,6 +1810,7 @@ async function main() {
   }
   host.listen({
     topMost: (v) => { state.topMost = v; if (state.sched) render(); },
+    shell: (m) => { state.shellVersion = String(m.version || ''); if (state.sched) render(); },
     maxWidth: (m) => { state.desktopWidth = { value: m.value, min: m.min, max: m.max, default: m.default }; if (state.sched) render(); },
     // Reserved hook for a future automatic Granola source in the desktop shell.
     granolaNotes: (m) => doImport([], { text: m.text || '', meetingTitle: m.title || '', meetingDate: m.date || state.sched?.today }),
