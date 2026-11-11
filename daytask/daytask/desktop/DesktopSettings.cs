@@ -22,10 +22,12 @@ internal static class DesktopConfig
     }
 }
 
-/// <summary>Per-machine window state: always-on-top and position. %APPDATA%\DayTask\desktop-state.json</summary>
+/// <summary>Per-machine window state: always-on-top, position and max width. %APPDATA%\DayTask\desktop-state.json</summary>
 internal sealed class DesktopState
 {
     public bool TopMost { get; set; }
+    /// <summary>Widest the page content may get, in CSS pixels. Null means the default.</summary>
+    public int? MaxWidth { get; set; }
     public int? X { get; set; }
     public int? Y { get; set; }
     public int? Width { get; set; }

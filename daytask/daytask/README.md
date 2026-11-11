@@ -31,7 +31,12 @@ Everything here runs on free tiers and personal accounts only: no company server
 
 **Always-on-top.** A browser tab (or a web app installed from Edge or Chrome) can't float above other windows, which is why the desktop is a native shell around the web app rather than a bookmark. In the shell, toggle it with the **Keep on top** button in the header's top-right, **Ctrl+Shift+T**, or **Always on top** in the tray icon's right-click menu (which also has Show DayTask and Exit). The shell stores the setting and window position in `%APPDATA%\DayTask\desktop-state.json`.
 
-**Window width.** The page's content is at most 640px wide, so the shell won't let the window get wider than that plus 16px (scaled for 125%/150% display scaling, and also when maximized). Height is unlimited. `ContentMaxWidth` in `desktop/MainForm.cs` must match `#app { max-width }` in `web/styles.css`; a unit test checks they agree.
+**Window width.** The page's content is at most 640px wide by default, so the shell won't let the window get wider than that plus 16px (scaled for 125%/150% display scaling, and also when maximized). Height is unlimited. To allow a wider (or narrower) window, set **Settings, Desktop, Maximum width** (400 to 1600 pixels) and press Save settings: the window cap and the list width both follow it. It applies to that computer only and is stored in `desktop-state.json` as `MaxWidth`. `ContentMaxWidth` (the default) in `desktop/MainForm.cs` must match the fallback in `#app { max-width: var(--app-max, …) }` in `web/styles.css`; a unit test checks they agree.
+
+**Versions.** The web app and the desktop shell each have a version number, because they are updated separately: the web app when you push (Cloudflare Pages deploys it), the shell when you rebuild it. **Settings, About** shows the web app version, the desktop app version (in the desktop app) and the site the page was loaded from. The shell's version is also at the top of the tray icon's right-click menu and in its hover text. The shell version includes the git commit it was built from, and "Debug" for a build run from Visual Studio. When you change something, bump the matching number:
+
+- Web app: `WEB_VERSION` in `web/js/version.js`
+- Desktop shell: `<Version>` in `desktop/DayTask.Desktop.csproj`
 
 **Phone sync.** Both devices read and write the same Supabase tables and subscribe to row changes. Writes are last-write-wins per field, which is fine for one person.
 

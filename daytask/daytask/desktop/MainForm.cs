@@ -18,10 +18,37 @@ internal sealed class MainForm : Form
     private readonly NotifyIcon _tray = new() { Text = "DayTask", Visible = true };
     private readonly ToolStripMenuItem _topMenuItem = new("Always on top");
 
-    // The page's content is at most 640px wide (#app in web/styles.css); the window may be
-    // at most this much wider, so it never opens up empty space beside the list.
+    // The page's content is at most 640px wide by default (#app in web/styles.css); the window
+    // may be at most this much wider, so it never opens up empty space beside the list.
+    // Settings > Desktop can change the content width on this computer (saved in DesktopState).
     private const int ContentMaxWidth = 640;
     private const int ExtraWidth = 16;
+    internal const int MinContentWidth = 400;
+    internal const int MaxContentWidth = 1600;
+
+    private int ContentWidth => Math.Clamp(_state.MaxWidth ?? ContentMaxWidth, MinContentWidth, MaxContentWidth);
+
+    /// <summary>
+    /// "1.1.0 (abc1234)": &lt;Version&gt; from the .csproj plus the git commit the build added,
+    /// and "Debug" for a build run from Visual Studio, so a test build is easy to tell apart.
+    /// </summary>
+    internal static readonly string AppVersion = BuildVersion();
+
+    private static string BuildVersion()
+    {
+        var info = typeof(MainForm).Assembly
+            .GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute), false)
+            .OfType<System.Reflection.AssemblyInformationalVersionAttribute>().FirstOrDefault()?.InformationalVersion
+            ?? Application.ProductVersion;
+        var plus = info.IndexOf('+');
+        var version = plus < 0 ? info : info[..plus];
+        var details = new List<string>();
+        if (plus >= 0) details.Add(info[(plus + 1)..][..Math.Min(7, info.Length - plus - 1)]);
+#if DEBUG
+        details.Add("Debug");
+#endif
+        return details.Count == 0 ? version : $"{version} ({string.Join(", ", details)})";
+    }
 
     public MainForm()
     {
@@ -37,13 +64,16 @@ internal sealed class MainForm : Form
         DpiChanged += (_, _) => ApplyMaxWidth(); // moved to a screen with different scaling
 
         // Tray icon: carries the daily due-date notification and brings the window back.
-        // Right-click: Always on top / Show DayTask / Exit.
+        // Right-click: version / Always on top / Show DayTask / Exit.
         _tray.Icon = AppIcon(SystemInformation.SmallIconSize);
+        _tray.Text = $"DayTask {AppVersion}"; // hover text (Windows allows up to 127 characters)
         _tray.BalloonTipClicked += (_, _) => ShowWindow();
         _tray.DoubleClick += (_, _) => ShowWindow();
         _topMenuItem.Checked = TopMost;
         _topMenuItem.Click += (_, _) => SetTopMost(!TopMost);
         var menu = new ContextMenuStrip();
+        menu.Items.Add(new ToolStripMenuItem($"DayTask desktop {AppVersion}") { Enabled = false });
+        menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(_topMenuItem);
         menu.Items.Add("Show DayTask", null, (_, _) => ShowWindow());
         menu.Items.Add(new ToolStripSeparator());
@@ -64,7 +94,7 @@ internal sealed class MainForm : Form
     {
         var scale = DeviceDpi / 96f;
         var frame = Width - ClientSize.Width; // borders around the page
-        var maxWidth = (int)Math.Ceiling((ContentMaxWidth + ExtraWidth) * scale) + frame;
+        var maxWidth = (int)Math.Ceiling((ContentWidth + ExtraWidth) * scale) + frame;
         // WinForms clamps the window against MaximumSize as a whole, so a 0 here is a
         // 0-high window (title bar only), not "no limit" — use the tallest the desktop can be.
         MaximumSize = new Size(maxWidth, SystemInformation.VirtualScreen.Height);
@@ -135,7 +165,7 @@ internal sealed class MainForm : Form
 
     private void OnNavigationCompleted(object? sender, CoreWebView2NavigationCompletedEventArgs e)
     {
-        if (e.IsSuccess) { PostTopMost(); return; }
+        if (e.IsSuccess) { PostTopMost(); PostMaxWidth(); PostShell(); return; }
         var url = System.Net.WebUtility.HtmlEncode(_appUrl);
         _web.CoreWebView2.NavigateToString($"""
             <html><body style="font-family:Segoe UI,sans-serif;padding:24px;color:#16202A">
@@ -156,7 +186,10 @@ internal sealed class MainForm : Form
             switch (type.GetString())
             {
                 case "toggleTopMost": SetTopMost(!TopMost); break;
-                case "hello": PostTopMost(); break;
+                case "hello": PostTopMost(); PostMaxWidth(); PostShell(); break;
+                case "setMaxWidth":
+                    if (doc.RootElement.TryGetProperty("value", out var v) && v.TryGetInt32(out var px)) SetMaxWidth(px);
+                    break;
                 case "notify":
                     ShowNotification(
                         doc.RootElement.TryGetProperty("title", out var t) ? t.GetString() : null,
@@ -179,6 +212,26 @@ internal sealed class MainForm : Form
 
     private void PostTopMost() =>
         _web.CoreWebView2?.PostWebMessageAsJson(JsonSerializer.Serialize(new { type = "topMost", value = TopMost }));
+
+    /// <summary>Save the content width for this computer, re-cap the window and tell the page.</summary>
+    private void SetMaxWidth(int value)
+    {
+        var px = Math.Clamp(value, MinContentWidth, MaxContentWidth);
+        _state.MaxWidth = px == ContentMaxWidth ? null : px; // the default stays unset, so a new default applies
+        _state.Save();
+        ApplyMaxWidth();
+        PostMaxWidth();
+    }
+
+    /// <summary>Tell the page which shell build it's running in (Settings > About).</summary>
+    private void PostShell() =>
+        _web.CoreWebView2?.PostWebMessageAsJson(JsonSerializer.Serialize(new { type = "shell", version = AppVersion }));
+
+    private void PostMaxWidth() =>
+        _web.CoreWebView2?.PostWebMessageAsJson(JsonSerializer.Serialize(new
+        {
+            type = "maxWidth", value = ContentWidth, min = MinContentWidth, max = MaxContentWidth, @default = ContentMaxWidth,
+        }));
 
     private void ShowNotification(string? title, string? body)
     {
