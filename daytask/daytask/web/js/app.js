@@ -32,6 +32,7 @@ const state = {
   timeAddDay: null,    // day with the "Add time" row open
   sync: sync.status(),
   topMost: false,
+  desktopWidth: null,   // { value, min, max, default } from the desktop shell; null on phone/browser
   cal: { year: 0, month0: 0, selected: null },
   addCtx: null,
   addPrio: 'normal',
@@ -1105,7 +1106,7 @@ function settingsHtml() {
     <p class="hint" style="margin:0">Applies the next time you open the app. While it's open, Hide and Show work the same either way.</p>
     <h2>Granola</h2>
     <label>Names that mean you (comma separated)<input type="text" name="aliases" value="${esc(s.granolaAliases.join(', '))}"></label>
-    ${host.available ? `<h2>Desktop</h2><div><button type="button" class="plain" data-act="pin">${state.topMost ? 'Turn off keep on top' : 'Keep window on top'}</button></div>` : ''}
+    ${host.available ? desktopSettingsHtml() : ''}
     <h2>Colors</h2>
     <div class="seg theme-seg" role="group" aria-label="Theme">
       ${[['auto', 'Match device'], ['light', 'Light'], ['dark', 'Dark']].map(([v, l]) =>
@@ -1518,6 +1519,9 @@ function wireView() {
     e.preventDefault();
     let next = readSettingsForm(e.target);
     if (!next) return;
+    const desktopWidth = readDesktopWidth(e.target);
+    if (desktopWidth === null) return;
+    if (desktopWidth !== undefined) host.setMaxWidth(desktopWidth); // the shell saves it and replies with maxWidth
     const prevSettings = state.settings;
     next = applyWorkHoursChange(prevSettings, next, new Date());
     guarded(async () => {
@@ -1533,6 +1537,26 @@ function wireView() {
       if (!askIfWorkComesBack(prevSettings, next, { fromSave: true })) toast('Settings saved');
     });
   });
+}
+
+/** Settings > Desktop: only in the Windows shell, and saved on this computer rather than synced. */
+function desktopSettingsHtml() {
+  const w = state.desktopWidth;
+  return `<h2>Desktop</h2>
+    <div><button type="button" class="plain" data-act="pin">${state.topMost ? 'Turn off keep on top' : 'Keep window on top'}</button></div>
+    ${w ? `<label>Maximum width (pixels)
+      <input type="number" name="desktopMaxWidth" min="${w.min}" max="${w.max}" step="10" value="${esc(w.value)}" required></label>
+    <p class="hint" style="margin:0">How wide the window and list can get on this computer (${w.min} to ${w.max}, default ${w.default}). Saved on this computer only.</p>` : ''}`;
+}
+
+/** The desktop width in the Settings form, or undefined if absent/unchanged, or null (with a message) if invalid. */
+function readDesktopWidth(form) {
+  const inp = form.elements.desktopMaxWidth;
+  const w = state.desktopWidth;
+  if (!inp || !w) return undefined;
+  const px = Number(inp.value);
+  if (!Number.isFinite(px) || px < w.min || px > w.max) { toast(`Maximum width must be ${w.min} to ${w.max} pixels.`); return null; }
+  return Math.round(px) === w.value ? undefined : Math.round(px);
 }
 
 /** The Settings form's values as settings, or null (with a message) if something's invalid. */
@@ -1778,6 +1802,7 @@ async function main() {
   }
   host.listen({
     topMost: (v) => { state.topMost = v; if (state.sched) render(); },
+    maxWidth: (m) => { state.desktopWidth = { value: m.value, min: m.min, max: m.max, default: m.default }; if (state.sched) render(); },
     // Reserved hook for a future automatic Granola source in the desktop shell.
     granolaNotes: (m) => doImport([], { text: m.text || '', meetingTitle: m.title || '', meetingDate: m.date || state.sched?.today }),
   });

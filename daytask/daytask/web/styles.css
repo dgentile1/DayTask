@@ -67,7 +67,7 @@ button { cursor: pointer; }
 :focus-visible { outline: 2px solid var(--work-text); outline-offset: 2px; }
 [hidden] { display: none !important; }
 
-#app { max-width: 640px; margin: 0 auto; min-height: 100vh; }
+#app { max-width: var(--app-max, 640px); margin: 0 auto; min-height: 100vh; } /* --app-max: desktop Settings */
 
 /* Mode band */
 .band {
