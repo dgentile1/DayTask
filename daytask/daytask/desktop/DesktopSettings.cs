@@ -32,6 +32,11 @@ internal sealed class DesktopState
     public int? Y { get; set; }
     public int? Width { get; set; }
     public int? Height { get; set; }
+    /// <summary>
+    /// The screen scaling the bounds above were measured at (96 is 100%), so they can be resized
+    /// if the window reopens somewhere scaled differently. Null for state saved before 1.2.0.
+    /// </summary>
+    public int? Dpi { get; set; }
 
     private static string FilePath => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "DayTask", "desktop-state.json");

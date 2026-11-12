@@ -11,7 +11,7 @@
     <RootNamespace>DayTask.Desktop</RootNamespace>
     <!-- Desktop shell version, shown in the tray menu and Settings > About. Bump it with each
          change to the shell. The build adds the git commit it was built from. -->
-    <Version>1.1.0</Version>
+    <Version>1.2.0</Version>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <!-- Same artwork as the web app (icon.svg); icon.ico is rendered from it. -->
     <ApplicationIcon>icon.ico</ApplicationIcon>

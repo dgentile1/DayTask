@@ -26,6 +26,10 @@ internal sealed class MainForm : Form
     internal const int MinContentWidth = 400;
     internal const int MaxContentWidth = 1600;
 
+    // Smallest useful window, at 100% scaling; SizeLimits sizes these for the current screen.
+    private const int MinWidth = 320;
+    private const int MinHeight = 420;
+
     private int ContentWidth => Math.Clamp(_state.MaxWidth ?? ContentMaxWidth, MinContentWidth, MaxContentWidth);
 
     /// <summary>
@@ -54,14 +58,13 @@ internal sealed class MainForm : Form
     {
         Text = "DayTask";
         Icon = AppIcon(null);
-        MinimumSize = new Size(320, 420);
         StartPosition = FormStartPosition.Manual;
         Bounds = InitialBounds();
         TopMost = _state.TopMost;
         UpdateTitle();
         Controls.Add(_web);
-        ApplyMaxWidth();
-        DpiChanged += (_, _) => ApplyMaxWidth(); // moved to a screen with different scaling
+        // How big the window may be, and what happens when the screen's scaling changes (moved
+        // to another monitor, docked, undocked), are both handled in WndProc.
 
         // Tray icon: carries the daily due-date notification and brings the window back.
         // Right-click: version / Always on top / Show DayTask / Exit.
@@ -81,24 +84,78 @@ internal sealed class MainForm : Form
         _tray.ContextMenuStrip = menu;
         FormClosed += (_, _) => _tray.Dispose();
 
-        Load += (_, _) => ApplyMaxWidth(); // again once the real window (and its scaling) exists
+        Load += (_, _) => ApplyWidthCap(); // once the real window (and its scaling) exists
         Load += async (_, _) => await InitWebViewAsync();
         FormClosing += (_, _) => SaveBounds();
     }
 
     /// <summary>
-    /// Cap the window width at the content's maximum width plus a little, at this screen's
-    /// scaling. Height is left effectively unlimited. Also applies when maximized.
+    /// How big the window may be on the screen it is on now: at most the content's maximum width
+    /// plus a little, so it never opens up empty space beside the list, and at least a usable
+    /// window. Height is left to Windows.
     /// </summary>
-    private void ApplyMaxWidth()
+    private (Size Minimum, int MaximumWidth) SizeLimits()
     {
         var scale = DeviceDpi / 96f;
-        var frame = Width - ClientSize.Width; // borders around the page
+        var minimum = new Size((int)Math.Round(MinWidth * scale), (int)Math.Round(MinHeight * scale));
+        var frame = WindowScaling.FrameWidth(CreateParams.Style, CreateParams.ExStyle, DeviceDpi);
         var maxWidth = (int)Math.Ceiling((ContentWidth + ExtraWidth) * scale) + frame;
-        // WinForms clamps the window against MaximumSize as a whole, so a 0 here is a
-        // 0-high window (title bar only), not "no limit" — use the tallest the desktop can be.
-        MaximumSize = new Size(maxWidth, SystemInformation.VirtualScreen.Height);
+        return (minimum, Math.Max(maxWidth, minimum.Width));
+    }
+
+    /// <summary>
+    /// Pull the window in if it is wider than it may be — after the content width is changed in
+    /// Settings, or a move to a screen that scales down. Windows applies the cap itself for
+    /// anything it drives (a drag, a maximize, a restore) via WM_GETMINMAXINFO below.
+    /// </summary>
+    private void ApplyWidthCap()
+    {
+        if (IsDisposed || !IsHandleCreated || WindowState != FormWindowState.Normal) return;
+        var (_, maxWidth) = SizeLimits();
         if (Width > maxWidth) Width = maxWidth;
+    }
+
+    protected override void WndProc(ref Message m)
+    {
+        switch (m.Msg)
+        {
+            // Asked right before Windows sizes the window, so the answer is always for the screen
+            // it is sizing it on. Form.MinimumSize/MaximumSize can't do this job: they hold the
+            // last screen's numbers at the moment a window is restored onto a new one, and clamp
+            // it to those — and WinForms rescales both again after a DPI change, on top of
+            // whatever we set, which turned the 640px width cap into a 1280px one at 200%.
+            case WindowScaling.WmGetMinMaxInfo when IsHandleCreated:
+            {
+                base.WndProc(ref m);
+                var (minimum, maxWidth) = SizeLimits();
+                WindowScaling.LimitTrackSize(m.LParam, minimum, maxWidth);
+                return;
+            }
+
+            // The screen's scaling changed: moved to another monitor, or the monitors themselves
+            // changed by docking or undocking.
+            case WindowScaling.WmDpiChanged:
+            {
+                var oldDpi = DeviceDpi;
+                var newDpi = (int)((long)m.WParam & 0xFFFF); // LOWORD: the new screen's scaling
+                // WinForms resizes the window for the new screen only if it is on screen at the
+                // time. Minimized — DayTask put away, then the laptop undocked — it takes the new
+                // scaling and leaves the size alone, so the window comes back at the old screen's
+                // pixel size: two thirds the size at 150%, half at 200%. It never catches up
+                // either, because the notification Windows repeats once the window is back matches
+                // DeviceDpi by then and counts as no change. Resize it ourselves in that case.
+                var resizeOurselves = WindowScaling.IsMinimizedOrMaximized(Handle);
+                base.WndProc(ref m);
+                if (resizeOurselves && newDpi > 0 && newDpi != oldDpi)
+                    WindowScaling.ScaleRestoreBounds(Handle, oldDpi, newDpi);
+                if (IsHandleCreated) BeginInvoke(ApplyWidthCap);
+                return;
+            }
+
+            default:
+                base.WndProc(ref m);
+                return;
+        }
     }
 
     /// <summary>
@@ -112,15 +169,34 @@ internal sealed class MainForm : Form
         return size is { } s ? new Icon(stream, s) : new Icon(stream);
     }
 
+    /// <summary>
+    /// Where to open: last session's window, resized if the screen it lands on is scaled
+    /// differently than the one it was closed on — shut on a docked 100% monitor and reopened on
+    /// a 150% laptop screen, the same pixel count is two thirds the window — and pulled inside
+    /// that screen. Otherwise a strip down the right of the main screen.
+    /// </summary>
     private Rectangle InitialBounds()
     {
         if (_state is { X: { } x, Y: { } y, Width: { } w, Height: { } h })
         {
             var saved = new Rectangle(x, y, w, h);
-            if (Screen.AllScreens.Any(s => s.WorkingArea.IntersectsWith(saved))) return saved;
+            if (Screen.AllScreens.Any(s => s.WorkingArea.IntersectsWith(saved)))
+            {
+                // The saved bounds are plain pixels; _state.Dpi is the scaling they were taken at.
+                var dpi = WindowScaling.DpiForRect(saved);
+                if (_state.Dpi is > 0 and var savedDpi && savedDpi != dpi)
+                    saved.Size = new Size(
+                        (int)Math.Round(saved.Width * (float)dpi / savedDpi),
+                        (int)Math.Round(saved.Height * (float)dpi / savedDpi));
+                return WindowScaling.ClampToWorkingArea(saved);
+            }
         }
         var area = Screen.PrimaryScreen?.WorkingArea ?? new Rectangle(0, 0, 1280, 800);
-        return new Rectangle(area.Right - 420, area.Top + 40, 400, Math.Min(760, area.Height - 80));
+        var scale = WindowScaling.DpiForRect(area) / 96f;
+        var size = new Size((int)Math.Round(400 * scale), (int)Math.Round(760 * scale));
+        var margin = (int)Math.Round(20 * scale);
+        return WindowScaling.ClampToWorkingArea(
+            new Rectangle(area.Right - size.Width - margin, area.Top + margin * 2, size.Width, size.Height));
     }
 
     private async Task InitWebViewAsync()
@@ -219,7 +295,7 @@ internal sealed class MainForm : Form
         var px = Math.Clamp(value, MinContentWidth, MaxContentWidth);
         _state.MaxWidth = px == ContentMaxWidth ? null : px; // the default stays unset, so a new default applies
         _state.Save();
-        ApplyMaxWidth();
+        ApplyWidthCap();
         PostMaxWidth();
     }
 
@@ -254,6 +330,7 @@ internal sealed class MainForm : Form
     {
         var b = WindowState == FormWindowState.Normal ? Bounds : RestoreBounds;
         (_state.X, _state.Y, _state.Width, _state.Height) = (b.X, b.Y, b.Width, b.Height);
+        _state.Dpi = DeviceDpi; // the scaling those pixels were measured at
         _state.Save();
     }
 }

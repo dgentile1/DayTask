@@ -2,11 +2,13 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
 import { join, relative } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const WEB = new URL('../web/', import.meta.url).pathname;
+const WEB = fileURLToPath(new URL('../web/', import.meta.url));
 const walk = (dir) => readdirSync(dir).flatMap((f) => {
   const p = join(dir, f);
-  return statSync(p).isDirectory() ? walk(p) : [relative(WEB, p)];
+  // sw.js lists its files with forward slashes; relative() uses backslashes on Windows.
+  return statSync(p).isDirectory() ? walk(p) : [relative(WEB, p).replaceAll('\\', '/')];
 });
 
 test('the service worker stores every file the app needs offline', () => {
