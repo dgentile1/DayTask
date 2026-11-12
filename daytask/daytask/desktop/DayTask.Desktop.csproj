@@ -11,7 +11,7 @@
     <RootNamespace>DayTask.Desktop</RootNamespace>
     <!-- Desktop shell version, shown in the tray menu and Settings > About. Bump it with each
          change to the shell. The build adds the git commit it was built from. -->
-    <Version>1.2.0</Version>
+    <Version>1.3.0</Version>
     <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
     <!-- Same artwork as the web app (icon.svg); icon.ico is rendered from it. -->
     <ApplicationIcon>icon.ico</ApplicationIcon>
@@ -25,7 +25,10 @@
   </ItemGroup>
 
   <ItemGroup>
-    <None Update="desktop.json" CopyToOutputDirectory="PreserveNewest" />
+    <!-- Content, not None: ClickOnce only packages content files, and without this the published
+         app has no desktop.json, falls back to http://localhost:5173/ and can't reach the app. -->
+    <None Remove="desktop.json" />
+    <Content Include="desktop.json" CopyToOutputDirectory="PreserveNewest" />
     <!-- ApplicationIcon covers the exe and taskbar; the window and tray read this copy so they
          can pick the frame that matches the size they need. -->
     <EmbeddedResource Include="icon.ico" LogicalName="DayTask.Desktop.icon.ico" />

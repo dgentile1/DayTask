@@ -317,7 +317,8 @@ internal sealed class MainForm : Form
         _tray.ShowBalloonTip(10_000, Clip(title ?? "DayTask", 60), Clip(body, 250), ToolTipIcon.Info);
     }
 
-    private void ShowWindow()
+    /// <summary>Bring the window back from the tray or the taskbar. Also used by a second launch.</summary>
+    internal void ShowWindow()
     {
         if (WindowState == FormWindowState.Minimized) WindowState = FormWindowState.Normal;
         Show();
