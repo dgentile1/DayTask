@@ -2,7 +2,7 @@
 // Strategy: network first (so updates arrive as soon as you're online), falling back to the
 // stored copy when offline or when the network is too slow. Supabase traffic is never touched;
 // task data offline is handled by js/data/sync.js.
-const CACHE = 'daytask-app-v3';
+const CACHE = 'daytask-app-v4';
 const FILES = [
   './',
   'index.html',
@@ -10,6 +10,8 @@ const FILES = [
   'config.js',
   'manifest.webmanifest',
   'icon.svg',
+  'favicon.ico',
+  'favicon.png',
   'fonts/atkinson-hyperlegible-latin-400-normal.woff2',
   'fonts/atkinson-hyperlegible-latin-700-normal.woff2',
   'vendor/supabase.js',
