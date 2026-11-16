@@ -6,7 +6,7 @@ import {
 } from './core/schedule.js';
 import { addDays, monthGrid, formatDay, formatClock } from './core/dates.js';
 import {
-  addSubtask, setSubtaskDone, renameSubtask, removeSubtask, reorderSubtasks, subtaskProgress, updateSubtask, nextDueSubtask, taskAsSubtasks, mergeNotes, sortSubtasks, subtaskGroup, cleanStatus, statusSuggestions,
+  addSubtask, setSubtaskDone, setSubtaskArchived, archiveDoneSubtasks, renameSubtask, removeSubtask, reorderSubtasks, subtaskProgress, updateSubtask, nextDueSubtask, taskAsSubtasks, mergeNotes, sortSubtasks, subtaskGroup, cleanStatus, statusSuggestions,
 } from './core/subtasks.js';
 import { runGranolaImport } from './integrations/granola/importer.js';
 import { host } from './host.js';
@@ -50,6 +50,8 @@ const subDrafts = {};
 const statusOpen = new Set(); // 'task:<id>' / 'sub:<id>:<subId>' — Status toggled on, nothing typed yet
 const showTaskStatus = (t) => !!t.status || statusOpen.has(`task:${t.id}`);
 const showSubStatus = (t, s) => !!s.status || statusOpen.has(`sub:${t.id}:${s.id}`); // half-typed "Add a subtask" title/date per task, so a sync redraw can't wipe them // selector to refocus after a re-render (rapid subtask entry)
+
+const archivedOpen = new Set(); // task ids showing their archived subtasks in the editor
 
 // Which tasks have their subtasks folded away. Per device, kept across launches.
 const FOLDED_KEY = 'daytask.foldedSubtasks';
@@ -648,8 +650,9 @@ function taskRow(t, { drag = true, showDate = false, showContext = false, groupe
   const open = state.expandedId === t.id;
   const subs = daily ? dailySubtasks(t, otherDay ? dailyDay : state.sched.today) : (t.subtasks || []); // fresh on other days
   const prog = subtaskProgress(subs);
+  const shown = subs.filter((s) => !s.archived); // archived ones are kept, just not listed
   const isFolded = folded.has(t.id);
-  const showSubs = subs.length && !open && !t.completedAt && !dailyDone && !isFolded;
+  const showSubs = shown.length && !open && !t.completedAt && !dailyDone && !isFolded;
   return `
   <li class="task ${ctx}${t.completedAt ? ' done' : ''}${daily ? ' is-daily' : ''}${dailyDone ? ' daily-done' : ''}${drag ? '' : ' no-drag'}${carry.carried ? ' is-carried' : ''}" data-id="${esc(t.id)}" data-group="${esc(daily ? 'daily' : dragGroup(t, state.sched))}">
     <div class="row">
@@ -665,11 +668,13 @@ function taskRow(t, { drag = true, showDate = false, showContext = false, groupe
         aria-expanded="${!isFolded}" aria-label="${prog.done} of ${prog.total} subtasks done, ${isFolded ? 'show' : 'hide'} subtasks"
         ${open || t.completedAt || dailyDone ? 'disabled' : ''}>${prog.done}/${prog.total}</button>` : ''}
     </div>
-    ${showSubs ? `<ul class="subtasks">${subs.map((s) => `
+    ${showSubs ? `<ul class="subtasks">${shown.map((s) => `
       <li class="sub${s.done ? ' done' : ''}" data-sub="${esc(s.id)}">
         <label><input type="checkbox" class="sub-check" data-act="sub-done" ${s.done ? 'checked' : ''}${otherDay ? ' disabled' : ''}>
           <span class="sub-body"><span class="sub-title">${esc(s.title)}</span>${subMeta(s)}</span></label>
         ${!s.done && !otherDay && !t.completedAt && !isAppTask(t) ? timerButton(t, s) : ''}
+        ${s.done && !otherDay && !t.completedAt ? `<button class="sub-archive" data-act="sub-archive"
+          title="Archive: take it off the list, keep the record" aria-label="Archive subtask ${esc(s.title)}">Archive</button>` : ''}
         ${s.status ? `<button class="status-pill sub-status" data-act="edit-sub-status" title="Status: ${esc(s.status)} (tap to change)">${esc(s.status)}</button>` : ''}
       </li>`).join('')}</ul>` : ''}
     ${!t.context && !t.completedAt ? `
@@ -692,6 +697,11 @@ function subMeta(st) {
 
 function editor(t) {
   const pressed = (a, b) => `aria-pressed="${a === b}"`;
+  const subs = isDaily(t) ? dailySubtasks(t, state.sched.today) : (t.subtasks || []);
+  const live = subs.filter((s) => !s.archived);
+  const archived = subs.filter((s) => s.archived);
+  const doneCount = live.filter((s) => s.done).length;
+  const showArchived = archivedOpen.has(t.id);
   return `
     <div class="editor">
       <div class="name-status">
@@ -719,9 +729,11 @@ function editor(t) {
         <button class="toggle status-toggle" data-act="status-toggle" aria-pressed="${showTaskStatus(t)}" title="Show a status beside the name">Status</button>
       </div>
       <div class="sub-editor">
-        <div class="sub-editor-head">Subtasks</div>
-        ${(t.subtasks || []).some((x) => x.dueDate) ? '<p class="sub-hint">A due date slots a subtask in by date; drag to put them in any order.</p>' : ''}
-        ${(t.subtasks || []).length ? `<ul class="sub-edit-list" data-for="${esc(t.id)}">${(isDaily(t) ? dailySubtasks(t, state.sched.today) : t.subtasks).map((s) => `
+        <div class="sub-editor-head">Subtasks
+          ${doneCount ? `<button class="link" data-act="archive-done">Archive ${doneCount} done</button>` : ''}
+        </div>
+        ${live.some((x) => x.dueDate) ? '<p class="sub-hint">A due date slots a subtask in by date; drag to put them in any order.</p>' : ''}
+        ${live.length ? `<ul class="sub-edit-list" data-for="${esc(t.id)}">${live.map((s) => `
           <li class="sub-edit${s.done ? ' done' : ''}" data-sub="${esc(s.id)}" data-group="${esc(subtaskGroup(s))}">
             <span class="sub-drag" aria-hidden="true" title="Drag to reorder">⋮⋮</span>
             <input type="checkbox" class="sub-check" data-act="sub-done" ${s.done ? 'checked' : ''} aria-label="Done">
@@ -732,9 +744,21 @@ function editor(t) {
               <label class="date-pick">Due <input type="date" data-sub-due value="${esc(s.dueDate || '')}" aria-label="Subtask due date (optional)"></label>
               <button class="toggle" data-act="sub-prio" aria-pressed="${s.priority === 'high'}" title="High priority">High</button>
               <button class="toggle status-toggle" data-act="sub-status-toggle" aria-pressed="${showSubStatus(t, s)}" title="Show a status beside the name">Status</button>
+              ${s.done ? '<button class="toggle" data-act="sub-archive" title="Archive: take it off the list, keep the record">Archive</button>' : ''}
               ${(() => { const d = !s.done && dueLabel(s); return d && d.cls !== 'due-later' ? `<span class="meta"><span class="${d.cls}">${esc(d.text)}</span></span>` : ''; })()}
             </div>
           </li>`).join('')}</ul>` : ''}
+        ${archived.length ? `
+          <div class="sub-archived">
+            <button class="link" data-act="toggle-archived" aria-expanded="${showArchived}">
+              ${showArchived ? 'Hide' : 'Show'} archived (${archived.length})</button>
+            ${showArchived ? `<ul class="sub-archived-list">${archived.map((s) => `
+              <li class="sub-archived-item" data-sub="${esc(s.id)}">
+                <span class="sub-title">${esc(s.title)}</span>
+                <button class="plain" data-act="sub-restore" aria-label="Put ${esc(s.title)} back on the list">Restore</button>
+                <button class="sub-del" data-act="sub-del" aria-label="Delete subtask ${esc(s.title)} for good" title="Delete for good">×</button>
+              </li>`).join('')}</ul>` : ''}
+          </div>` : ''}
         <div class="sub-new">
           <input type="text" data-sub-new="${esc(t.id)}" value="${esc(subDrafts[t.id]?.title || '')}" placeholder="Add a subtask" maxlength="500" aria-label="New subtask">
           <input type="date" data-sub-new-due value="${esc(subDrafts[t.id]?.due || '')}" aria-label="New subtask due date (optional)" title="Due date (optional)">
@@ -952,7 +976,7 @@ function timeHtml() {
     const choices = [];
     for (const t of state.tasks.filter((x) => (!x.completedAt || x.completedOn === today) && !isAppTask(x))) {
       choices.push({ key: timeKey(t.id), label: t.title });
-      for (const st of t.subtasks || []) choices.push({ key: timeKey(t.id, st.id), label: `${t.title} › ${st.title}` });
+      for (const st of (t.subtasks || []).filter((x) => !x.archived)) choices.push({ key: timeKey(t.id, st.id), label: `${t.title} › ${st.title}` });
     }
     for (const x of Object.values(perLine)) if (!choices.some((c) => c.key === x.key)) choices.push({ key: x.key, label: x.subtaskId ? `${x.taskTitle ?? 'Task'} › ${x.title}` : x.title });
     return `<section class="time-day${d === today ? ' today' : ''}">
@@ -1411,6 +1435,41 @@ function wireView() {
       case 'sub-del': {
         const subId = btn.closest('[data-sub]').dataset.sub;
         guarded(async () => { await stopSubTimerIfFor(id, subId); await changeSubtasks(id, (l) => removeSubtask(l, subId)); });
+        break;
+      }
+      case 'sub-archive': {
+        const subId = btn.closest('[data-sub]').dataset.sub;
+        guarded(async () => {
+          await stopSubTimerIfFor(id, subId);
+          const title = find(id)?.subtasks.find((x) => x.id === subId)?.title ?? '';
+          await changeSubtasks(id, (l) => setSubtaskArchived(l, subId, true));
+          toast(`Archived: ${title}`, { label: 'Undo', run: () => guarded(() => changeSubtasks(id, (l) => setSubtaskArchived(l, subId, false))) });
+        });
+        break;
+      }
+      case 'sub-restore': {
+        const subId = btn.closest('[data-sub]').dataset.sub;
+        guarded(() => changeSubtasks(id, (l) => setSubtaskArchived(l, subId, false)));
+        break;
+      }
+      case 'archive-done': {
+        const t = find(id);
+        const subs = (isDaily(t) ? dailySubtasks(t, state.sched.today) : (t.subtasks || [])).filter((s) => s.done && !s.archived);
+        if (!subs.length) break;
+        const before = subs.map((s) => s.id);
+        guarded(async () => {
+          for (const st of subs) await stopSubTimerIfFor(id, st.id);
+          await changeSubtasks(id, archiveDoneSubtasks);
+          toast(`Archived ${before.length} subtask${before.length === 1 ? '' : 's'}`, {
+            label: 'Undo',
+            run: () => guarded(() => changeSubtasks(id, (l) => before.reduce((acc, sid) => setSubtaskArchived(acc, sid, false), l))),
+          });
+        });
+        break;
+      }
+      case 'toggle-archived': {
+        if (archivedOpen.has(id)) archivedOpen.delete(id); else archivedOpen.add(id);
+        render({ force: true });
         break;
       }
       case 'sub-prio': {

@@ -2,6 +2,7 @@
 import { addDays, localParts, weekdayOf } from './dates.js';
 import { normalizeColors } from './colors.js';
 import { isDaily, dailyShowsToday, dailyDoneToday } from './daily.js';
+import { isOpenSubtask } from './subtasks.js';
 export { dailyDoneToday };
 
 export const DEFAULT_SETTINGS = Object.freeze({
@@ -166,7 +167,7 @@ export function dueSoonItems(tasks, today, dueSoonDays) {
     if (t.completedAt || isDaily(t)) continue;
     if (hot(t)) items.push({ task: t, subtask: null, title: t.title, dueDate: t.dueDate, priority: t.priority });
     for (const st of t.subtasks || []) {
-      if (!st.done && hot(st)) items.push({ task: t, subtask: st, title: st.title, dueDate: st.dueDate, priority: st.priority });
+      if (isOpenSubtask(st) && hot(st)) items.push({ task: t, subtask: st, title: st.title, dueDate: st.dueDate, priority: st.priority });
     }
   }
   const rank = (i) => (i.priority === 'high' ? 0 : 1);
@@ -182,7 +183,7 @@ export function dueSoonItems(tasks, today, dueSoonDays) {
  */
 export function carryInfo(task, state) {
   if (task.completedAt || isDaily(task)) return { carried: false, since: null };
-  const dates = [task.dueDate, ...(task.subtasks || []).filter((s) => !s.done).map((s) => s.dueDate)].filter(Boolean);
+  const dates = [task.dueDate, ...(task.subtasks || []).filter(isOpenSubtask).map((s) => s.dueDate)].filter(Boolean);
   if (!dates.length) return { carried: false, since: null };
   const earliest = dates.sort()[0];
   const late = earliest < state.today || (task.context === 'work' && earliest === state.today && state.workDayOver);
@@ -308,7 +309,7 @@ export function tasksForDay(tasks, day, { mode, today, timeZone, workDate = toda
     // so it's always on today (and, in "every day" mode, on each day since it was added).
     if (!t.dueDate && day === today) return true;
     // A task belongs on the calendar on its own due date and on each open subtask's due date.
-    const dates = [t.dueDate, ...(t.subtasks || []).filter((st) => !st.done).map((st) => st.dueDate)].filter(Boolean);
+    const dates = [t.dueDate, ...(t.subtasks || []).filter(isOpenSubtask).map((st) => st.dueDate)].filter(Boolean);
     const firstDay = t.startDate || (t.createdAt ? localParts(new Date(t.createdAt), timeZone).date : null);
     if (!dates.length) {
       if (mode !== 'until-due') return false;

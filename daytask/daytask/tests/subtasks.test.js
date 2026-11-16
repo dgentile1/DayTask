@@ -12,7 +12,7 @@ test('add, check, rename, remove, reorder, progress', () => {
   assert.deepEqual(l.map((s) => s.title), ['Pull CAN logs', 'Flash unit']);
   const [a, b] = l;
   l = setSubtaskDone(l, a.id, true);
-  assert.deepEqual(subtaskProgress(l), { done: 1, total: 2, allDone: false });
+  assert.deepEqual(subtaskProgress(l), { done: 1, total: 2, allDone: false, archived: 0 });
   l = renameSubtask(l, b.id, 'Flash both units');
   l = renameSubtask(l, b.id, ''); // blank rename keeps the old title
   assert.equal(l.find((s) => s.id === b.id).title, 'Flash both units');
@@ -23,7 +23,64 @@ test('add, check, rename, remove, reorder, progress', () => {
   assert.equal(subtaskProgress(l).allDone, true);
   l = removeSubtask(l, a.id);
   assert.deepEqual(l.map((s) => s.id), [b.id]);
-  assert.deepEqual(subtaskProgress([]), { done: 0, total: 0, allDone: false });
+  assert.deepEqual(subtaskProgress([]), { done: 0, total: 0, allDone: false, archived: 0 });
+});
+
+test('archiving hides a finished subtask without deleting it', async () => {
+  const { setSubtaskArchived, archiveDoneSubtasks, isOpenSubtask, subtaskGroup } = await import('../web/js/core/subtasks.js');
+  const names = (l) => l.map((s) => s.title);
+  let l = ['Pull logs', 'Flash unit', 'Write up'].reduce((acc, t) => addSubtask(acc, t), []);
+  const id = (t) => l.find((s) => s.title === t).id;
+  assert.equal(l[0].archived, false);
+
+  l = setSubtaskDone(l, id('Pull logs'), true);
+  l = setSubtaskArchived(l, id('Pull logs'), true);
+  assert.equal(l.length, 3);                                        // still on the task
+  assert.deepEqual(names(l), ['Flash unit', 'Write up', 'Pull logs']); // archived sit below everything
+  assert.deepEqual(subtaskProgress(l), { done: 0, total: 2, allDone: false, archived: 1 });
+  assert.equal(subtaskGroup(l[2]), 'archived');
+  assert.equal(isOpenSubtask(l[2]), false);
+
+  l = setSubtaskArchived(l, id('Pull logs'), false);                // restored: back, still checked off
+  assert.deepEqual([l[2].archived, l[2].done], [false, true]);
+  assert.deepEqual(subtaskProgress(l), { done: 1, total: 3, allDone: false, archived: 0 });
+
+  // Archiving something still open counts as finishing it.
+  l = setSubtaskArchived(l, id('Write up'), true);
+  assert.deepEqual([l[2].done, l[2].archived], [true, true]);
+  l = setSubtaskArchived(l, id('Write up'), false);
+
+  // Unchecking an archived subtask brings it back out of the archive.
+  l = setSubtaskArchived(l, id('Pull logs'), true);
+  l = setSubtaskDone(l, id('Pull logs'), false);
+  assert.deepEqual(names(l.filter(isOpenSubtask)), ['Flash unit', 'Pull logs']); // undated: slots in after the open ones
+
+  // Archive done: everything checked off at once, nothing else touched.
+  l = setSubtaskDone(l, id('Pull logs'), true);
+  l = setSubtaskDone(l, id('Write up'), true);
+  l = archiveDoneSubtasks(l);
+  assert.deepEqual(l.filter((s) => s.archived).map((s) => s.title).sort(), ['Pull logs', 'Write up']);
+  assert.deepEqual(subtaskProgress(l), { done: 0, total: 1, allDone: false, archived: 2 });
+  assert.deepEqual(names(l.filter(isOpenSubtask)), ['Flash unit']);
+});
+
+test('an archived subtask is out of the dated and daily rules', async () => {
+  const { setSubtaskArchived, nextDueSubtask, normalizeSubtasks: norm } = await import('../web/js/core/subtasks.js');
+  const { dailySubtasks } = await import('../web/js/core/daily.js');
+  let l = addSubtask([], 'Emissions test', { dueDate: '2026-12-01' });
+  l = addSubtask(l, 'Pay fee', { dueDate: '2026-12-05' });
+  assert.equal(nextDueSubtask(l).title, 'Emissions test');
+  l = setSubtaskArchived(l, l[0].id, true);
+  assert.equal(nextDueSubtask(l).title, 'Pay fee');                 // archived no longer counts as next up
+
+  // A daily task's ticks reset each day, but an archived subtask doesn't come back.
+  const t = { repeat: { days: 'all', doneOn: null, subsOn: '2026-11-01' }, subtasks: l };
+  const fresh = dailySubtasks(t, '2026-11-02');
+  assert.deepEqual(fresh.map((s) => [s.title, s.done, s.archived]), [
+    ['Pay fee', false, false],
+    ['Emissions test', true, true],
+  ]);
+  assert.equal(norm([{ title: 'A', archived: 1 }])[0].archived, true); // stored data: coerced, not dropped
 });
 
 test('normalize tolerates bad stored data', () => {

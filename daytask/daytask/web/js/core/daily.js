@@ -20,11 +20,14 @@ export const dailyShowsToday = (t, state) => isDaily(t) && (t.repeat.days === 'a
 
 export const dailyDoneToday = (t, today) => isDaily(t) && t.repeat.doneOn === today;
 
-/** Today's view of a daily task's subtasks: ticks from an earlier day don't count. */
+/**
+ * Today's view of a daily task's subtasks: ticks from an earlier day don't count.
+ * Archived ones are out of the checklist for good, so a new day doesn't bring them back.
+ */
 export function dailySubtasks(t, today) {
   const subs = t.subtasks || [];
   if (!isDaily(t) || t.repeat.subsOn === today) return subs;
-  return subs.map((s) => (s.done ? { ...s, done: false } : s));
+  return subs.map((s) => (s.done && !s.archived ? { ...s, done: false } : s));
 }
 
 /** Default repeat for a new daily task in a list: Work repeats on work days, Home every day. */

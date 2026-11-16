@@ -268,7 +268,8 @@ ul.subtasks { list-style: none; margin: -4px 0 0; padding: 0 12px 8px 66px; disp
 .sub-check { width: 16px; height: 16px; margin: 3px 0 0; flex: none; accent-color: var(--ink); }
 .sub.done .sub-title, .sub-edit.done input[data-sub-title] { text-decoration: line-through; color: var(--muted); }
 .sub-editor { display: grid; gap: 6px; }
-.sub-editor-head { font-size: .85rem; color: var(--muted); }
+.sub-editor-head { font-size: .85rem; color: var(--muted); display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.sub-editor-head .link { font-size: .85rem; }
 .sub-hint { margin: -2px 0 2px; font-size: .8rem; color: var(--muted); }
 .sub-edit-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
 .sub-edit { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding-bottom: 6px; border-bottom: 1px dashed var(--line); }
@@ -280,6 +281,19 @@ ul.subtasks { list-style: none; margin: -4px 0 0; padding: 0 12px 8px 66px; disp
 .sub-edit input[type=text] { padding: 5px 8px; }
 .sub-drag { color: var(--muted); cursor: grab; touch-action: none; user-select: none; letter-spacing: -2px; padding: 0 2px; }
 .sub-del { flex: none; background: none; border: 0; color: var(--muted); font-size: 1.2rem; line-height: 1; padding: 2px 6px; }
+/* Archiving: a finished subtask leaves the list but keeps its record (and its time) */
+.sub-archive {
+  flex: none; align-self: flex-start; margin-top: 2px; border: 1px solid var(--line); background: var(--surface);
+  color: var(--muted); border-radius: 999px; padding: 0 8px; font-size: .74rem;
+}
+.sub-archive:hover { color: var(--ink); border-color: var(--ink); }
+.sub-archived { font-size: .85rem; }
+.sub-archived > .link { font-size: .85rem; padding-left: 0; }
+.sub-archived-list { list-style: none; margin: 2px 0 0; padding: 0; display: grid; gap: 4px; }
+.sub-archived-item { display: flex; align-items: center; gap: 6px; }
+.sub-archived-item .sub-title { flex: 1; min-width: 0; overflow-wrap: anywhere; text-decoration: line-through; color: var(--muted); }
+.sub-archived-item .plain { padding: 3px 9px; font-size: .85rem; }
+
 .sub-new { display: flex; flex-wrap: wrap; gap: 6px; }
 .sub-new input { padding: 5px 8px; }
 .sub-new input[type=text] { flex: 1 1 140px; min-width: 0; }
