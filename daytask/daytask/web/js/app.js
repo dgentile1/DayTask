@@ -670,8 +670,9 @@ function taskRow(t, { drag = true, showDate = false, showContext = false, groupe
     </div>
     ${showSubs ? `<ul class="subtasks">${shown.map((s) => `
       <li class="sub${s.done ? ' done' : ''}" data-sub="${esc(s.id)}">
-        <label><input type="checkbox" class="sub-check" data-act="sub-done" ${s.done ? 'checked' : ''}${otherDay ? ' disabled' : ''}>
-          <span class="sub-body"><span class="sub-title">${esc(s.title)}</span>${subMeta(s)}</span></label>
+        <input type="checkbox" class="sub-check" data-act="sub-done" ${s.done ? 'checked' : ''}${otherDay ? ' disabled' : ''} aria-label="Mark ${esc(s.title)} done">
+        <button class="sub-title-btn" data-act="sub-rename" title="Change this name">
+          <span class="sub-body"><span class="sub-title">${esc(s.title)}</span>${subMeta(s)}</span></button>
         ${!s.done && !otherDay && !t.completedAt && !isAppTask(t) ? timerButton(t, s) : ''}
         ${s.done && !otherDay && !t.completedAt ? `<button class="sub-archive" data-act="sub-archive"
           title="Archive: take it off the list, keep the record" aria-label="Archive subtask ${esc(s.title)}">Archive</button>` : ''}
@@ -972,21 +973,22 @@ function timeHtml() {
       return ownRow + g.subs.sort((a, b) => b.seconds - a.seconds).map((x) => lineRow(x, d, true)).join('');
     }).join('');
     const addOpen = state.timeAddDay === d;
-    // Choices for "+ Add time": open tasks and their open subtasks, plus anything with time this week.
+    // Choices for "+ Add time": open Work tasks and their open subtasks, plus Work time already on this week. A to Z.
     const choices = [];
-    for (const t of state.tasks.filter((x) => (!x.completedAt || x.completedOn === today) && !isAppTask(x))) {
+    for (const t of state.tasks.filter((x) => x.context === 'work' && (!x.completedAt || x.completedOn === today))) {
       choices.push({ key: timeKey(t.id), label: t.title });
       for (const st of (t.subtasks || []).filter((x) => !x.archived)) choices.push({ key: timeKey(t.id, st.id), label: `${t.title} › ${st.title}` });
     }
-    for (const x of Object.values(perLine)) if (!choices.some((c) => c.key === x.key)) choices.push({ key: x.key, label: x.subtaskId ? `${x.taskTitle ?? 'Task'} › ${x.title}` : x.title });
+    for (const x of Object.values(perLine)) if (x.context === 'work' && !choices.some((c) => c.key === x.key)) choices.push({ key: x.key, label: x.subtaskId ? `${x.taskTitle ?? 'Task'} › ${x.title}` : x.title });
+    choices.sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: 'base', numeric: true }));
     return `<section class="time-day${d === today ? ' today' : ''}">
       <h3><span>${esc(formatDay(d, { weekday: 'long', month: 'short', day: 'numeric' }))}</span><span class="time-total">${dayTotal ? esc(formatDuration(dayTotal)) : ''}</span></h3>
       ${rows ? `<ul class="time-list">${rows}</ul>` : '<p class="empty">No time logged.</p>'}
-      ${addOpen ? `<div class="time-add">
-          <select data-time-task aria-label="Task or subtask">${choices.map((c) => `<option value="${esc(c.key)}">${esc(c.label)}</option>`).join('')}</select>
+      ${addOpen ? (choices.length ? `<div class="time-add">
+          <select data-time-task aria-label="Work task or subtask">${choices.map((c) => `<option value="${esc(c.key)}">${esc(c.label)}</option>`).join('')}</select>
           <input type="text" data-time-add-input placeholder="1:30" aria-label="Time to add (h:mm)">
           <button class="primary" data-act="time-add-save" data-day="${d}">Add</button><button class="plain" data-act="time-cancel">Cancel</button>
-        </div>` : `<button class="link" data-act="time-add" data-day="${d}">+ Add time</button>`}
+        </div>` : `<div class="time-add"><p class="hint" style="margin:0">No open Work tasks to add time to.</p><button class="plain" data-act="time-cancel">Cancel</button></div>`) : `<button class="link" data-act="time-add" data-day="${d}">+ Add time</button>`}
     </section>`;
   }).join('');
   const taskTotals = Object.values(perLine).sort((a, b) => b.seconds - a.seconds)
@@ -1403,6 +1405,13 @@ function wireView() {
         focusAfterRender = `.task[data-id="${CSS.escape(id)}"] input[data-field="status"]`;
         render({ force: true });
         break;
+      case 'sub-rename': {
+        const subId = btn.closest('[data-sub]').dataset.sub;
+        state.expandedId = id;
+        focusAfterRender = `.task[data-id="${CSS.escape(id)}"] li.sub-edit[data-sub="${CSS.escape(subId)}"] input[data-sub-title]`;
+        render({ force: true });
+        break;
+      }
       case 'edit-sub-status': {
         const subId = btn.closest('[data-sub]').dataset.sub;
         state.expandedId = id;
@@ -1557,6 +1566,7 @@ function wireView() {
       if (e.key === 'Escape') { state.timeEdit = null; document.activeElement.blur(); render({ force: true }); }
     }
     if (e.target.matches('input[data-time-add-input]') && e.key === 'Enter') { e.preventDefault(); saveTimeAdd(); }
+    if (e.key === 'Enter' && e.target.hasAttribute('data-sub-title')) { e.preventDefault(); e.target.blur(); } // blur saves the new name
     if (e.key === 'Enter' && e.target.hasAttribute('data-sub-new')) { e.preventDefault(); addSubtaskFromInput(e.target); }
     if (e.key === 'Enter' && e.target.hasAttribute('data-sub-new-due')) {
       e.preventDefault(); addSubtaskFromInput(e.target.closest('.sub-new').querySelector('[data-sub-new]'));

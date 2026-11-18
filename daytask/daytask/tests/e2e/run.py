@@ -298,12 +298,26 @@ with sync_playwright() as p:
     ags = desk.locator('li.task', has_text='Send AGS quote')
     check(ags.locator('ul.subtasks li').count() == 3 and ags.locator('.sub-toggle').inner_text() == '0/3',
           'subtasks listed under the task with 0/3 progress')
-    ags.locator('ul.subtasks li', has_text='Pull current pricing').locator('label').click(); desk.wait_for_timeout(300)
+    ags.locator('ul.subtasks li', has_text='Pull current pricing').locator('.sub-check').click(); desk.wait_for_timeout(300)
     check(('Pull current pricing', True) in subs_of('Send AGS quote') and ags.locator('.sub-toggle').inner_text() == '1/3',
           'checking a subtask from the list saves it and updates progress')
     check(subs_of('Send AGS quote')[-1] == ('Pull current pricing', True)
           and ags.locator('ul.subtasks li').last.inner_text().strip().startswith('Pull current pricing'),
           'checked-off subtask drops to the bottom')
+    # The name is for renaming, not ticking: it opens the editor with that subtask's name ready to change.
+    ags.locator('ul.subtasks li', has_text='Add disclaimer language').locator('.sub-title-btn').click()
+    desk.wait_for_timeout(300)
+    focused = desk.evaluate("() => { const e = document.activeElement; return [e.getAttribute('data-sub-title') !== null, e.value]; }")
+    check(focused == [True, 'Add disclaimer language'] and ('Add disclaimer language', False) in subs_of('Send AGS quote'),
+          'tapping a subtask name opens its name to edit without ticking it')
+    desk.keyboard.press('Control+a'); desk.keyboard.type('Add disclaimer wording')
+    desk.locator('li.task', has_text='Send AGS quote').locator('[data-act="collapse"]').click(); desk.wait_for_timeout(400)
+    check(('Add disclaimer wording', False) in subs_of('Send AGS quote'), 'the new name saves')
+    ags = desk.locator('li.task', has_text='Send AGS quote')
+    ags.locator('ul.subtasks li', has_text='Add disclaimer wording').locator('.sub-title-btn').click(); desk.wait_for_timeout(300)
+    desk.keyboard.press('Control+a'); desk.keyboard.type('Add disclaimer language')
+    desk.locator('li.task', has_text='Send AGS quote').locator('[data-act="collapse"]').click(); desk.wait_for_timeout(400)
+    ags = desk.locator('li.task', has_text='Send AGS quote')
     phone.wait_for_timeout(900)
     p_ags = phone.locator('li.task', has_text='Send AGS quote')
     check(p_ags.locator('.sub-toggle').inner_text() == '1/3' and p_ags.locator('ul.subtasks li.done').count() == 1, 'subtasks sync to phone')
@@ -404,7 +418,7 @@ with sync_playwright() as p:
     rt().locator('[data-act="collapse"]').click(); desk.wait_for_timeout(200)
     inline = rt().locator('ul.subtasks .sub-title').evaluate_all('els => els.map(e => e.textContent)')
     check(inline == ['Call DMV', 'Pay fee', 'File form', 'Get emissions test'], f'list under the task follows your order: {inline}')
-    rt().locator('ul.subtasks li', has_text='Get emissions test').locator('label').click(); desk.wait_for_timeout(450)
+    rt().locator('ul.subtasks li', has_text='Get emissions test').locator('.sub-check').click(); desk.wait_for_timeout(450)
     check(sub_names() == ['Get emissions test', 'Call DMV', 'Pay fee', 'File form'], f'unchecking slots it back in by its date: {sub_names()}')
     phone.wait_for_timeout(1200)
     p_inline = phone.locator('li.task', has_text='Renew truck registration').locator('ul.subtasks .sub-title').evaluate_all('els => els.map(e => e.textContent)')
@@ -418,7 +432,7 @@ with sync_playwright() as p:
     desk.locator('li.task', has_text='Send AGS quote').locator('[data-act="expand"]').click(); desk.wait_for_timeout(150)
     desk.locator('li.task', has_text='Send AGS quote').locator('[data-act="collapse"]').click(); desk.wait_for_timeout(150)
     # Finishing the last subtask offers to finish the task (but doesn't do it on its own).
-    desk.locator('li.task', has_text='Send AGS quote').locator('ul.subtasks li', has_text='Email Marcus').locator('label').click()
+    desk.locator('li.task', has_text='Send AGS quote').locator('ul.subtasks li', has_text='Email Marcus').locator('.sub-check').click()
     desk.wait_for_timeout(300)
     check(row('Send AGS quote')['completed_at'] is None and 'All subtasks done' in desk.inner_text('#toast'),
           'all subtasks done: prompt shown, task not auto-completed')
@@ -1167,6 +1181,9 @@ with sync_playwright() as p:
     for _ in range(5):  # a refresh can swallow the click; try again until the row opens
         if tm.locator('select[data-time-task]').count(): break
         tday('Monday, Nov 2').locator('[data-act="time-add"]').click(); tm.wait_for_timeout(300)
+    opts = tm.eval_on_selector_all('select[data-time-task] option', 'e => e.map(o => o.textContent)')
+    check(opts == sorted(opts, key=str.lower) and not any('Fix gutter' in o or 'Renew truck' in o for o in opts),
+          f'+ Add time offers only Work tasks, A to Z: {opts}')
     tm.select_option('select[data-time-task]', label=B)
     tm.fill('input[data-time-add-input]', '45m'); tm.click('[data-act="time-add-save"]'); tm.wait_for_timeout(500)
     check(tval('Monday, Nov 2', B).inner_text() == '0:45' and 'Week total 2:30' in tm.inner_text('.time-week-total'), '+ Add time logs time on a day')
@@ -1204,7 +1221,7 @@ with sync_playwright() as p:
     sbtn('Fill form').click(); confirm_start(tm)
     check(running()[0]['title'] == 'Fill form' and tbtn(B).locator('.tt').inner_text() == '0:20', 'and starting a subtask stops the task\'s (task now 0:20)')
     tick('2026-11-03T17:40:00Z')
-    tli(B).locator('ul.subtasks li', has_text='Fill form').locator('label').click(); tm.wait_for_timeout(500)
+    tli(B).locator('ul.subtasks li', has_text='Fill form').locator('.sub-check').click(); tm.wait_for_timeout(500)
     check(running() == [] and [e for e in ents() if e['title'] == 'Fill form'][0]['seconds'] == 600, 'checking off a subtask stops its timer')
     tm.click('.tabs [data-view="time"]'); tm.wait_for_timeout(300)
     tue = tday('Tuesday, Nov 3')

@@ -5,12 +5,13 @@ namespace DayTask.Desktop;
 /// <summary>
 /// The parts of per-monitor scaling WinForms doesn't do for us.
 ///
-/// WinForms resizes a PerMonitorV2 window by itself when the screen's scaling changes, but only
-/// while the window is on screen. If the message arrives while the window is minimized — DayTask
-/// put away, then the laptop undocked — it takes the new scaling and leaves the window's size
-/// alone, so the window comes back at the old screen's pixel size and stays there. These helpers
-/// let <see cref="MainForm"/> size the window itself, for that case and for the size limits,
-/// which have to be answered per screen rather than held in Form.MinimumSize/MaximumSize.
+/// WinForms resizes a PerMonitorV2 window by itself when the screen's scaling changes, taking the
+/// rectangle Windows suggests. That is the right size while the window is on screen. It is not
+/// after an undock with DayTask put away: nothing is said until the window is restored, and the
+/// suggestion is then the taskbar placeholder's size, about 160x28, which would leave the window
+/// as small as its minimum allows. These helpers let <see cref="MainForm"/> recognise that case
+/// and size the window itself, and answer the size limits per screen rather than holding them in
+/// Form.MinimumSize/MaximumSize.
 /// </summary>
 internal static class WindowScaling
 {
@@ -44,8 +45,6 @@ internal static class WindowScaling
         public static Placement Empty => new() { Length = Marshal.SizeOf<Placement>() };
     }
 
-    [DllImport("user32.dll")] private static extern bool IsIconic(IntPtr window);
-    [DllImport("user32.dll")] private static extern bool IsZoomed(IntPtr window);
     [DllImport("user32.dll")] private static extern bool GetWindowPlacement(IntPtr window, ref Placement placement);
     [DllImport("user32.dll")] private static extern bool SetWindowPlacement(IntPtr window, ref Placement placement);
     [DllImport("user32.dll")] private static extern IntPtr MonitorFromRect(ref Rect rect, int flags);
@@ -53,11 +52,39 @@ internal static class WindowScaling
     private static extern bool AdjustWindowRectExForDpi(ref Rect rect, int style, bool hasMenu, int exStyle, int dpi);
     [DllImport("Shcore.dll")] private static extern int GetDpiForMonitor(IntPtr monitor, int type, out int dpiX, out int dpiY);
 
+    /// <summary>Put a rectangle back as the window's restored size, pulled inside the screen it lands on.</summary>
+    public static void SetRestoreBounds(IntPtr window, Rectangle bounds)
+    {
+        var placement = Placement.Empty;
+        if (!GetWindowPlacement(window, ref placement)) return;
+        // NormalPosition is in workspace coordinates, which only differ from the screen
+        // coordinates ClampToWorkingArea uses when the taskbar is docked top or left.
+        placement.NormalPosition = new Rect(ClampToWorkingArea(bounds));
+        SetWindowPlacement(window, ref placement); // leaves ShowCmd alone, so a minimized window stays minimized
+    }
+
     /// <summary>
-    /// True while the window isn't showing at its normal size, so WinForms will skip rescaling it
-    /// and whatever size it is remembering for the restore has to be corrected by hand.
+    /// Whether the size Windows suggests with a DPI change is the one it gets by scaling the
+    /// window, give or take rounding. It isn't once the window has been minimized: the suggestion
+    /// is worked out from the taskbar placeholder (about 160x28) and stays that way even after the
+    /// window is back at its real size, so taking it shrinks the window to the smallest it may be.
     /// </summary>
-    public static bool IsMinimizedOrMaximized(IntPtr window) => IsIconic(window) || IsZoomed(window);
+    public static bool LooksScaled(Size suggested, Size wanted)
+    {
+        static bool Near(int a, int b) => Math.Abs(a - b) <= Math.Max(8, b / 10);
+        return Near(suggested.Width, wanted.Width) && Near(suggested.Height, wanted.Height);
+    }
+
+    /// <summary>The same rectangle's size at a different screen scaling, top-left kept.</summary>
+    public static Rectangle ScaleSize(Rectangle bounds, int oldDpi, int newDpi)
+    {
+        if (oldDpi <= 0 || newDpi <= 0) return bounds;
+        var scale = (float)newDpi / oldDpi;
+        return new Rectangle(
+            bounds.X, bounds.Y,
+            (int)Math.Round(bounds.Width * scale),
+            (int)Math.Round(bounds.Height * scale));
+    }
 
     /// <summary>
     /// Narrow the limits Windows is about to size the window by. It asks for these immediately
@@ -78,28 +105,6 @@ internal static class WindowScaling
             Math.Max(Math.Min(info.MaxTrackSize.X, maximumWidth), info.MinTrackSize.X),
             info.MaxTrackSize.Y);
         Marshal.StructureToPtr(info, minMaxInfo, false);
-    }
-
-    /// <summary>
-    /// Resize the rectangle Windows is holding for the window's restored size, as if the window
-    /// had been open on the new screen all along, then pull it inside that screen.
-    /// </summary>
-    public static void ScaleRestoreBounds(IntPtr window, int oldDpi, int newDpi)
-    {
-        var placement = Placement.Empty;
-        if (oldDpi <= 0 || newDpi <= 0 || !GetWindowPlacement(window, ref placement)) return;
-
-        var current = placement.NormalPosition;
-        var scale = (float)newDpi / oldDpi;
-        var scaled = new Rectangle(
-            current.Left, current.Top,
-            (int)Math.Round((current.Right - current.Left) * scale),
-            (int)Math.Round((current.Bottom - current.Top) * scale));
-
-        // NormalPosition is in workspace coordinates, which only differ from the screen
-        // coordinates ClampToWorkingArea uses when the taskbar is docked top or left.
-        placement.NormalPosition = new Rect(ClampToWorkingArea(scaled));
-        SetWindowPlacement(window, ref placement); // leaves ShowCmd alone, so it stays minimized
     }
 
     /// <summary>Shrink and shift a window rectangle until it fits the screen it is nearest to.</summary>

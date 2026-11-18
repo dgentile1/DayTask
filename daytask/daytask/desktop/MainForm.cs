@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Text.Json;
 using Microsoft.Web.WebView2.Core;
 using Microsoft.Web.WebView2.WinForms;
@@ -12,6 +13,24 @@ namespace DayTask.Desktop;
 /// </summary>
 internal sealed class MainForm : Form
 {
+    /// <summary>The rectangle Windows suggests with WM_DPICHANGED, in lParam.</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativeRect { public int Left, Top, Right, Bottom; }
+
+    // Where a minimized window parks. Its rectangle, and the one Windows keeps for the restore,
+    // both read like this, so a rectangle starting here is a placeholder and not a real size.
+    private const int ParkedEdge = -31000;
+
+    /// <summary>
+    /// The last size the window had while it was really on screen, and the scaling it was measured
+    /// at. Restoring a minimized window onto a screen that has gone — the laptop undocked while
+    /// DayTask was put away — makes Windows overwrite its own record of the restored size with the
+    /// minimized placeholder before it says a word about the new scaling, so this is the only
+    /// account of how big the window actually is by the time that message arrives.
+    /// </summary>
+    private Rectangle _lastNormalBounds;
+    private int _lastNormalDpi;
+
     private readonly WebView2 _web = new() { Dock = DockStyle.Fill };
     private readonly DesktopState _state = DesktopState.Load();
     private readonly string _appUrl = DesktopConfig.LoadAppUrl();
@@ -60,6 +79,9 @@ internal sealed class MainForm : Form
         Icon = AppIcon(null);
         StartPosition = FormStartPosition.Manual;
         Bounds = InitialBounds();
+        (_lastNormalBounds, _lastNormalDpi) = (Bounds, DeviceDpi);
+        Resize += (_, _) => RememberNormalBounds();
+        Move += (_, _) => RememberNormalBounds();
         TopMost = _state.TopMost;
         UpdateTitle();
         Controls.Add(_web);
@@ -103,6 +125,15 @@ internal sealed class MainForm : Form
         return (minimum, Math.Max(maxWidth, minimum.Width));
     }
 
+    /// <summary>Keep a note of the window's size whenever it is genuinely on screen at that size.</summary>
+    private void RememberNormalBounds()
+    {
+        if (!IsHandleCreated || IsDisposed || WindowState != FormWindowState.Normal) return;
+        var b = Bounds;
+        if (b.Width <= 0 || b.Height <= 0 || b.X <= ParkedEdge || b.Y <= ParkedEdge) return; // parked, not real
+        (_lastNormalBounds, _lastNormalDpi) = (b, DeviceDpi);
+    }
+
     /// <summary>
     /// Pull the window in if it is wider than it may be — after the content width is changed in
     /// Settings, or a move to a screen that scales down. Windows applies the cap itself for
@@ -138,16 +169,24 @@ internal sealed class MainForm : Form
             {
                 var oldDpi = DeviceDpi;
                 var newDpi = (int)((long)m.WParam & 0xFFFF); // LOWORD: the new screen's scaling
-                // WinForms resizes the window for the new screen only if it is on screen at the
-                // time. Minimized — DayTask put away, then the laptop undocked — it takes the new
-                // scaling and leaves the size alone, so the window comes back at the old screen's
-                // pixel size: two thirds the size at 150%, half at 200%. It never catches up
-                // either, because the notification Windows repeats once the window is back matches
-                // DeviceDpi by then and counts as no change. Resize it ourselves in that case.
-                var resizeOurselves = WindowScaling.IsMinimizedOrMaximized(Handle);
+                // Undock with DayTask minimized and Windows says nothing until the window is
+                // restored, and then suggests a rectangle worked out from the taskbar placeholder
+                // (about 160x28) rather than from the window. DefWndProc takes that as the window's
+                // new size, our own minimum floors it, and the window comes back as small as the
+                // shell allows. Neither the window's state nor the size Windows keeps for the
+                // restore gives this away: restoring onto a screen that has gone clears the
+                // minimized flag and overwrites that size with the placeholder before the message
+                // arrives, so by now both look like an ordinary window that really is 160x28.
+                // What does give it away is the suggestion not being the size the window was,
+                // scaled — and the size it was is only still known because we wrote it down.
+                var suggested = Marshal.PtrToStructure<NativeRect>(m.LParam);
+                var suggestedSize = new Size(suggested.Right - suggested.Left, suggested.Bottom - suggested.Top);
+                var wanted = WindowScaling.ScaleSize(_lastNormalBounds, _lastNormalDpi, newDpi)
+                    with { Location = new Point(suggested.Left, suggested.Top) };
+                var windowsIsRight = WindowScaling.LooksScaled(suggestedSize, wanted.Size);
                 base.WndProc(ref m);
-                if (resizeOurselves && newDpi > 0 && newDpi != oldDpi)
-                    WindowScaling.ScaleRestoreBounds(Handle, oldDpi, newDpi);
+                if (!windowsIsRight && newDpi > 0 && newDpi != oldDpi)
+                    WindowScaling.SetRestoreBounds(Handle, wanted);
                 if (IsHandleCreated) BeginInvoke(ApplyWidthCap);
                 return;
             }
@@ -329,9 +368,11 @@ internal sealed class MainForm : Form
 
     private void SaveBounds()
     {
-        var b = WindowState == FormWindowState.Normal ? Bounds : RestoreBounds;
+        var normal = WindowState == FormWindowState.Normal;
+        var b = normal ? Bounds : _lastNormalBounds;
+        if (b.Width <= 0 || b.Height <= 0 || b.X <= ParkedEdge || b.Y <= ParkedEdge) return; // nothing real to save
         (_state.X, _state.Y, _state.Width, _state.Height) = (b.X, b.Y, b.Width, b.Height);
-        _state.Dpi = DeviceDpi; // the scaling those pixels were measured at
+        _state.Dpi = normal ? DeviceDpi : _lastNormalDpi; // the scaling those pixels were measured at
         _state.Save();
     }
 }

@@ -75,11 +75,19 @@ test('the window is resized for the screen it lands on, even while minimized', (
   assert.doesNotMatch(cs, /MinimumSize\s*=/, 'MinimumSize goes stale across screens');
   assert.doesNotMatch(cs, /MaximumSize\s*=/, 'MaximumSize goes stale across screens');
 
-  // Minimized or maximized, WinForms skips its own rescale, so the restore size is fixed by hand.
+  // Restoring a minimized window onto a screen that has gone (the laptop undocked while DayTask
+  // was put away) has Windows suggest the taskbar placeholder's size, about 160x28, which would
+  // leave the window at its minimum. Neither the window's state nor the size Windows keeps for
+  // the restore says so by then, so the shell keeps its own note and checks the suggestion
+  // against it. See the comment on the WM_DPICHANGED case for the whole story.
   assert.match(cs, /case WindowScaling\.WmDpiChanged/);
-  assert.match(cs, /WindowScaling\.IsMinimizedOrMaximized\(Handle\)/);
-  assert.match(cs, /WindowScaling\.ScaleRestoreBounds\(Handle, oldDpi, newDpi\)/);
+  assert.match(cs, /_lastNormalBounds/, 'the real size has to be written down before it is lost');
+  assert.match(cs, /WindowScaling\.LooksScaled\(suggestedSize, wanted\.Size\)/);
+  assert.match(cs, /WindowScaling\.SetRestoreBounds\(Handle, wanted\)/);
   assert.match(scaling, /SetWindowPlacement/);
+  // Only noted while the window is really on screen: the placeholder must never be mistaken for it.
+  assert.match(cs, /WindowState != FormWindowState\.Normal\) return;/);
+  assert.match(cs, /b\.X <= ParkedEdge/);
 
   // The frame can't be measured as Width - ClientSize.Width: that reads 0 while minimized.
   assert.match(scaling, /AdjustWindowRectExForDpi/);
@@ -87,7 +95,7 @@ test('the window is resized for the screen it lands on, even while minimized', (
 
   // Saved bounds are pixels, so the scaling they were taken at is saved with them.
   assert.match(state, /public int\? Dpi \{ get; set; \}/);
-  assert.match(cs, /_state\.Dpi = DeviceDpi/);                       // on close
+  assert.match(cs, /_state\.Dpi = normal \? DeviceDpi : _lastNormalDpi/); // on close
   assert.match(cs, /_state\.Dpi is > 0 and var savedDpi/);           // on open
   assert.match(cs, /WindowScaling\.ClampToWorkingArea\(saved\)/);  // and kept on screen
 });
