@@ -2,11 +2,11 @@ import * as store from './data/store.js'; // sign-in and live updates
 import * as sync from './data/sync.js';   // all task/settings reads and writes (offline-first)
 import {
   normalizeSettings, scheduleState, buildTodayView, listSiblings, dueStatus, dueSoonItems, tasksForDay, dailyForDay, carryInfo, dragGroup, isAppTask, contextLabel, extendWorkDay, endWorkDayNow, extensionKeepsWorkOnTop, applyWorkHoursChange, workComesBack,
-  initialSortKey, sortKeyBetween, renormalizeKeys, bySortKey, resolveTimeZone,
+  initialSortKey, sortKeyBetween, renormalizeKeys, bySortKey, resolveTimeZone, MAX_STATUS_LIST,
 } from './core/schedule.js';
 import { addDays, monthGrid, formatDay, formatClock } from './core/dates.js';
 import {
-  addSubtask, setSubtaskDone, setSubtaskArchived, archiveDoneSubtasks, renameSubtask, removeSubtask, reorderSubtasks, subtaskProgress, updateSubtask, nextDueSubtask, taskAsSubtasks, mergeNotes, sortSubtasks, subtaskGroup, cleanStatus, statusSuggestions,
+  addSubtask, setSubtaskDone, setSubtaskArchived, archiveDoneSubtasks, renameSubtask, removeSubtask, reorderSubtasks, subtaskProgress, updateSubtask, nextDueSubtask, taskAsSubtasks, mergeNotes, sortSubtasks, subtaskGroup, cleanStatus, statusSuggestions, statusMenuGroups, COMMON_STATUSES, MAX_STATUS_LENGTH,
 } from './core/subtasks.js';
 import { runGranolaImport } from './integrations/granola/importer.js';
 import { host } from './host.js';
@@ -457,8 +457,7 @@ function render({ force = false } = {}) {
   renderPending = false;
   renderBand();
   renderAddForm();
-  const sugg = document.getElementById('status-suggestions');
-  if (sugg) sugg.innerHTML = statusSuggestions(state.tasks).map((x) => `<option value="${esc(x)}"></option>`).join('');
+  if (statusMenu.input && (!statusMenu.input.isConnected || !statusMenu.input.offsetParent)) closeStatusMenu(); // its Status box was redrawn or hidden away
   if (!(state.view === 'settings' && settingsDirty && !force)) renderView();
   const bar = document.querySelector('.topbar');
   if (bar) document.documentElement.style.setProperty('--topbar-h', `${Math.round(bar.getBoundingClientRect().height)}px`);
@@ -481,6 +480,160 @@ for (const type of ['pointerup', 'pointercancel']) {
     pointerHeld = false;
     setTimeout(() => { if (renderPending && !dragging) render(); }, 0);
   }, true);
+}
+
+// ---------------------------------------------------------------- status dropdown
+// Our own list instead of the browser's <datalist>, because a datalist can only ever show
+// what matches. Here typing narrows the list as usual, and the whole list stays underneath
+// past a divider, so a status you can't spell from memory is still one tap away. What's in
+// it: your list from Settings > Statuses first, then the statuses already on your tasks.
+// One floating menu is reused by every Status box (add form, task editor, subtask rows).
+const statusMenu = { el: null, input: null, items: [], active: -1 };
+const statusMenuOpen = () => !!statusMenu.el && !statusMenu.el.hidden;
+
+function statusMenuEl() {
+  if (!statusMenu.el) {
+    const el = document.createElement('div');
+    el.id = 'status-menu';
+    el.className = 'status-menu';
+    el.setAttribute('role', 'listbox');
+    el.setAttribute('aria-label', 'Statuses');
+    el.hidden = true;
+    document.body.append(el);
+    statusMenu.el = el;
+  }
+  return statusMenu.el;
+}
+
+/** Make this the Status box the list belongs to, without showing it yet. */
+function attachStatusMenu(input) {
+  if (statusMenu.input === input) return;
+  hideStatusMenu();
+  statusMenu.input = input;
+  statusMenu.items = [];
+  input.setAttribute('role', 'combobox');
+  input.setAttribute('aria-autocomplete', 'list');
+  input.setAttribute('aria-controls', 'status-menu');
+  input.setAttribute('aria-expanded', 'false');
+}
+
+function drawStatusMenu() {
+  const input = statusMenu.input;
+  if (!input?.isConnected) return closeStatusMenu();
+  const groups = statusMenuGroups(statusSuggestions(state.tasks, state.settings.statusList), input.value);
+  statusMenu.items = groups.flatMap((g) => g.items);
+  if (!statusMenu.items.length) return closeStatusMenu(); // nothing to offer at all
+  if (statusMenu.active >= statusMenu.items.length) statusMenu.active = -1;
+  const el = statusMenuEl();
+  let i = -1;
+  el.innerHTML = groups.map((g, gi) => {
+    const head = g.label ? `<div class="status-menu-sep">${esc(g.label)}</div>` : '';
+    const none = gi === 0 && !g.items.length ? '<div class="status-menu-none">No status matches what you typed</div>' : '';
+    return head + none + g.items.map((x) => {
+      i += 1;
+      return `<button type="button" class="status-opt" role="option" id="status-opt-${i}" aria-selected="false" data-i="${i}" tabindex="-1">${esc(x)}</button>`;
+    }).join('');
+  }).join('');
+  el.hidden = false;
+  input.setAttribute('aria-expanded', 'true');
+  placeStatusMenu();
+  markStatusActive();
+}
+
+/** Under the Status box, or above it when there's more room there. Always inside the window. */
+function placeStatusMenu() {
+  const { el, input } = statusMenu;
+  if (!el || el.hidden || !input?.isConnected) return;
+  const r = input.getBoundingClientRect();
+  el.style.minWidth = `${Math.round(r.width)}px`;
+  el.style.maxWidth = `${Math.round(Math.max(160, Math.min(window.innerWidth - 16, Math.max(r.width, 280))))}px`;
+  const below = window.innerHeight - r.bottom;
+  const top = below >= el.offsetHeight + 6 || below >= r.top ? r.bottom + 2 : Math.max(4, r.top - el.offsetHeight - 2);
+  el.style.top = `${Math.round(top)}px`;
+  el.style.left = `${Math.round(Math.max(8, Math.min(r.left, window.innerWidth - el.offsetWidth - 8)))}px`;
+}
+
+function markStatusActive() {
+  for (const b of statusMenu.el?.querySelectorAll('.status-opt') || []) {
+    const on = Number(b.dataset.i) === statusMenu.active;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-selected', String(on));
+    if (on) b.scrollIntoView({ block: 'nearest' });
+  }
+  if (statusMenu.active < 0) statusMenu.input?.removeAttribute('aria-activedescendant');
+  else statusMenu.input?.setAttribute('aria-activedescendant', `status-opt-${statusMenu.active}`);
+}
+
+/** Put the list away but stay attached to the box, so typing or an arrow key brings it back. */
+function hideStatusMenu() {
+  if (statusMenu.el) { statusMenu.el.hidden = true; statusMenu.el.innerHTML = ''; }
+  statusMenu.input?.setAttribute('aria-expanded', 'false');
+  statusMenu.input?.removeAttribute('aria-activedescendant');
+  statusMenu.active = -1;
+}
+
+function closeStatusMenu() {
+  hideStatusMenu();
+  statusMenu.input = null;
+  statusMenu.items = [];
+}
+
+/** Picking saves it the same way typing it would: the input's own change handler does the work. */
+function pickStatus(i) {
+  const input = statusMenu.input;
+  const value = statusMenu.items[i];
+  if (!input || value === undefined) return;
+  input.value = value;
+  closeStatusMenu();
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+  input.dispatchEvent(new Event('change', { bubbles: true }));
+  input.focus();
+  attachStatusMenu(input); // focus never left the box, so focusin won't fire to re-attach it
+}
+
+function wireStatusMenu() {
+  // Like a browser's own list: landing in a Status box doesn't drop it open (that would bury the
+  // Due date and the Work/Home buttons underneath). Tapping the box, typing, or ↓ asks for it.
+  document.addEventListener('focusin', (e) => {
+    const input = e.target.closest?.('[data-status-input]');
+    if (input) attachStatusMenu(input);
+    else if (!e.target.closest?.('#status-menu')) closeStatusMenu();
+  });
+  document.addEventListener('click', (e) => {
+    const input = e.target.closest?.('[data-status-input]');
+    if (!input) return;
+    attachStatusMenu(input);
+    drawStatusMenu();
+  });
+  document.addEventListener('input', (e) => { if (e.target === statusMenu.input) { statusMenu.active = -1; drawStatusMenu(); } });
+  document.addEventListener('keydown', (e) => {
+    if (e.target !== statusMenu.input) return;
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (!statusMenuOpen()) { drawStatusMenu(); return; } // closed or put away with Escape: ↓ brings it back
+      const n = statusMenu.items.length;
+      if (!n) return;
+      const step = e.key === 'ArrowDown' ? 1 : -1;
+      statusMenu.active = statusMenu.active < 0 ? (step > 0 ? 0 : n - 1) : (statusMenu.active + step + n) % n;
+      markStatusActive();
+      return;
+    }
+    if (e.key === 'Enter' && statusMenu.active >= 0) { e.preventDefault(); pickStatus(statusMenu.active); return; }
+    if (e.key === 'Escape' && statusMenuOpen()) {
+      e.preventDefault(); e.stopPropagation(); // keep what's typed; just put the list away
+      hideStatusMenu();
+      return;
+    }
+    if (e.key === 'Tab') closeStatusMenu();
+  });
+  // pointerdown, not click: picking has to beat the blur that would close the menu first.
+  document.addEventListener('pointerdown', (e) => {
+    const opt = e.target.closest?.('.status-opt');
+    if (opt) { e.preventDefault(); pickStatus(Number(opt.dataset.i)); return; }
+    if (!e.target.closest?.('[data-status-input], #status-menu')) closeStatusMenu();
+  });
+  window.addEventListener('resize', placeStatusMenu);
+  document.addEventListener('scroll', placeStatusMenu, true);
 }
 
 // ---------------------------------------------------------------- band + add form
@@ -707,7 +860,7 @@ function editor(t) {
     <div class="editor">
       <div class="name-status">
         <label class="name-field">Task<input type="text" data-field="title" value="${esc(t.title)}" maxlength="500"></label>
-        ${showTaskStatus(t) ? `<label class="status-field">Status<input type="text" data-field="status" value="${esc(t.status || '')}" list="status-suggestions" maxlength="60" placeholder="e.g. Waiting" autocomplete="off"></label>` : ''}
+        ${showTaskStatus(t) ? `<label class="status-field">Status<input type="text" data-field="status" value="${esc(t.status || '')}" data-status-input maxlength="60" placeholder="e.g. Waiting" autocomplete="off"></label>` : ''}
       </div>
       <label>Note<textarea data-field="note" rows="3" placeholder="Context, links, who asked">${esc(t.note)}</textarea></label>
       <div class="line">
@@ -739,7 +892,7 @@ function editor(t) {
             <span class="sub-drag" aria-hidden="true" title="Drag to reorder">⋮⋮</span>
             <input type="checkbox" class="sub-check" data-act="sub-done" ${s.done ? 'checked' : ''} aria-label="Done">
             <input type="text" data-sub-title value="${esc(s.title)}" maxlength="500" aria-label="Subtask">
-            ${showSubStatus(t, s) ? `<input type="text" data-sub-status value="${esc(s.status || '')}" list="status-suggestions" maxlength="60" placeholder="Status" aria-label="Status for ${esc(s.title)}" autocomplete="off">` : ''}
+            ${showSubStatus(t, s) ? `<input type="text" data-sub-status data-status-input value="${esc(s.status || '')}" maxlength="60" placeholder="Status" aria-label="Status for ${esc(s.title)}" autocomplete="off">` : ''}
             <button class="sub-del" data-act="sub-del" aria-label="Remove subtask ${esc(s.title)}">×</button>
             <div class="sub-opts">
               <label class="date-pick">Due <input type="date" data-sub-due value="${esc(s.dueDate || '')}" aria-label="Subtask due date (optional)"></label>
@@ -1132,6 +1285,11 @@ function settingsHtml() {
       <label><input type="radio" name="dueBannerStart" value="hidden" ${s.dueBannerStart === 'hidden' ? 'checked' : ''}> Hidden until I press Show</label>
     </fieldset>
     <p class="hint" style="margin:0">Applies the next time you open the app. While it's open, Hide and Show work the same either way.</p>
+    <h2>Statuses</h2>
+    <label>Your statuses, one per line
+      <textarea name="statusList" rows="5" placeholder="In progress&#10;Waiting" spellcheck="false">${esc(s.statusList.join('\n'))}</textarea></label>
+    <p class="hint" style="margin:0">Offered first, in this order, whenever you type a status on a task or subtask; statuses already in use follow them. Leave it empty to be offered only the ones you've used. ${esc(String(MAX_STATUS_LIST))} at most, ${esc(String(MAX_STATUS_LENGTH))} characters each.</p>
+    <div><button type="button" class="plain" data-act="status-list-reset">Reset to the standard list</button></div>
     <h2>Granola</h2>
     <label>Names that mean you (comma separated)<input type="text" name="aliases" value="${esc(s.granolaAliases.join(', '))}"></label>
     ${host.available ? desktopSettingsHtml() : ''}
@@ -1362,6 +1520,13 @@ function wireView() {
         for (const inp of form.querySelectorAll(sel)) inp.dataset.custom = '0';
         settingsDirty = true;
         previewSettingsForm();
+        break;
+      }
+      case 'status-list-reset': {
+        const box = btn.closest('#settings-form').elements.statusList;
+        box.value = COMMON_STATUSES.join('\n');
+        settingsDirty = true;
+        box.focus();
         break;
       }
       case 'extend-day': {
@@ -1651,6 +1816,7 @@ function readSettingsForm(form) {
       granolaAliases: f.aliases.value.split(',').map((a) => a.trim()).filter(Boolean),
       dueSoonDays: Number(f.dueSoonDays.value),
       dueBannerStart: f.dueBannerStart.value,
+      statusList: f.statusList.value.split('\n'), // normalizeSettings tidies, de-duplicates and caps it
       theme: f.theme.value,
       colors: formColors(form),
     });
@@ -1866,6 +2032,7 @@ async function main() {
   onThemeChange(() => { if (state.sched && !$('#app').hidden) renderBand(); });
   wireAddForm();
   wireView();
+  wireStatusMenu();
   for (const b of document.querySelectorAll('.tabs button')) {
     b.addEventListener('click', () => {
       state.view = b.dataset.view;

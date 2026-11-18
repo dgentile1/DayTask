@@ -2,7 +2,7 @@
 import { addDays, localParts, weekdayOf } from './dates.js';
 import { normalizeColors } from './colors.js';
 import { isDaily, dailyShowsToday, dailyDoneToday } from './daily.js';
-import { isOpenSubtask } from './subtasks.js';
+import { isOpenSubtask, cleanStatus, COMMON_STATUSES } from './subtasks.js';
 export { dailyDoneToday };
 
 export const DEFAULT_SETTINGS = Object.freeze({
@@ -15,6 +15,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   calendarMode: 'due-only',  // 'due-only' | 'until-due'
   theme: 'auto',             // 'auto' (follow the device) | 'light' | 'dark'
   dueBannerStart: 'open',    // due-soon banner when the app opens: 'open' | 'hidden' (until Show)
+  statusList: [...COMMON_STATUSES], // the statuses offered first in every Status box; empty = only ones in use
   extendPromptMinutes: 15,   // "Extend day" button appears this long before work ends
   extendVisibleMinutes: 15,  // ...and stays this long before lists switch to Home on their own
   extendDefaultMinutes: 30,  // default time the button adds
@@ -23,6 +24,21 @@ export const DEFAULT_SETTINGS = Object.freeze({
 });
 
 const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+/** The statuses you listed in Settings: tidied like any status, no blanks, no repeats, 40 at most. */
+export const MAX_STATUS_LIST = 40;
+function normalizeStatusList(list) {
+  const seen = new Set();
+  const out = [];
+  for (const raw of list) {
+    const v = cleanStatus(raw);
+    if (!v || seen.has(v.toLowerCase())) continue;
+    seen.add(v.toLowerCase());
+    out.push(v);
+    if (out.length === MAX_STATUS_LIST) break;
+  }
+  return out;
+}
 
 export function normalizeSettings(raw = {}) {
   const s = { ...DEFAULT_SETTINGS, ...(raw || {}) };
@@ -39,6 +55,8 @@ export function normalizeSettings(raw = {}) {
   if (!['due-only', 'until-due'].includes(s.calendarMode)) s.calendarMode = DEFAULT_SETTINGS.calendarMode;
   if (!['auto', 'light', 'dark'].includes(s.theme)) s.theme = DEFAULT_SETTINGS.theme;
   if (!['open', 'hidden'].includes(s.dueBannerStart)) s.dueBannerStart = DEFAULT_SETTINGS.dueBannerStart;
+  // An empty list is a choice (offer only the statuses in use), so only a missing one falls back.
+  s.statusList = normalizeStatusList(Array.isArray(s.statusList) ? s.statusList : DEFAULT_SETTINGS.statusList);
   const mins = (v, lo, hi, d) => { const n = Math.round(Number(v)); return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : d; };
   s.extendPromptMinutes = mins(s.extendPromptMinutes, 1, 120, DEFAULT_SETTINGS.extendPromptMinutes);
   s.extendVisibleMinutes = mins(s.extendVisibleMinutes, 1, 240, DEFAULT_SETTINGS.extendVisibleMinutes);

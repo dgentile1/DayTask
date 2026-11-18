@@ -43,7 +43,7 @@
     <form id="add" class="add" autocomplete="off">
       <div class="add-main">
         <input name="title" placeholder="Add a task" aria-label="New task" maxlength="500" required>
-        <input name="status" class="add-status" placeholder="Status" aria-label="Status (optional)" list="status-suggestions" maxlength="60" autocomplete="off" hidden>
+        <input name="status" class="add-status" placeholder="Status" aria-label="Status (optional)" data-status-input maxlength="60" autocomplete="off" hidden>
         <button type="submit" class="primary">Add</button>
       </div>
       <div class="add-opts">
@@ -120,7 +120,7 @@
     </form>
   </dialog>
 
-  <datalist id="status-suggestions"></datalist>
+  <!-- The status dropdown (js/app.js) is added here at runtime, next to whichever Status box is in use. -->
   <div id="toast" role="status" aria-live="polite"></div>
   <script type="module" src="js/app.js"></script>
 </body>

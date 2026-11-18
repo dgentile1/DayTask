@@ -7,8 +7,9 @@
 const YMD = /^\d{4}-\d{2}-\d{2}$/;
 
 /** A status is optional short text shown beside a name; blank means none. */
+export const MAX_STATUS_LENGTH = 60;
 export function cleanStatus(v) {
-  const t = String(v ?? '').replace(/\s+/g, ' ').trim().slice(0, 60);
+  const t = String(v ?? '').replace(/\s+/g, ' ').trim().slice(0, MAX_STATUS_LENGTH);
   return t || null;
 }
 
@@ -161,19 +162,36 @@ export function mergeNotes(targetNote, movedTitle, movedNote) {
   return (targetNote || '').trim() ? `${targetNote.trim()}\n\n${block}` : block;
 }
 
-/** Status suggestions: common ones first, then any in use (newest-looking first), no repeats. */
+/** The status list a fresh account starts with (Settings > Statuses can change it). */
 export const COMMON_STATUSES = ['In progress', 'Waiting', 'Blocked', 'On hold', 'Needs review'];
-export function statusSuggestions(tasks) {
+
+/** Status suggestions: your own list first, then any in use (newest-looking first), no repeats. */
+export function statusSuggestions(tasks, defaults = COMMON_STATUSES) {
   const used = [];
   for (const t of tasks || []) {
     if (t.status) used.push(t.status);
     for (const st of t.subtasks || []) if (st.status && !st.archived) used.push(st.status);
   }
   const seen = new Set();
-  return [...COMMON_STATUSES, ...used].filter((x) => {
+  return [...(defaults || []), ...used].filter((x) => {
     const k = x.toLowerCase();
     if (seen.has(k)) return false;
     seen.add(k);
     return true;
   });
+}
+
+/**
+ * The groups the status dropdown shows: `[{ label, items }]`. Typing narrows the list the
+ * way it always has, but the whole list stays underneath, past a divider, so a status you
+ * can't spell from memory is still one tap away. Nothing typed = the full list on its own.
+ */
+export function statusMenuGroups(all, typed) {
+  const list = all || [];
+  const q = String(typed ?? '').trim().toLowerCase();
+  if (!q) return [{ label: null, items: list }];
+  return [
+    { label: null, items: list.filter((x) => x.toLowerCase().includes(q)) },
+    { label: 'All statuses', items: list },
+  ];
 }

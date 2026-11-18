@@ -430,6 +430,26 @@ li.sub .sub-title-btn { flex: 1; min-width: 0; }
 .toggle.status-toggle[aria-pressed="true"] { background: var(--status); border-color: var(--status); color: var(--surface); }
 .name-status .name-field:only-child { flex-basis: 100%; }
 
+/* The status dropdown: matches on top, then a divider, then every status available */
+.status-menu {
+  position: fixed; z-index: 60; max-height: min(46vh, 320px); overflow-y: auto; overscroll-behavior: contain;
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius);
+  box-shadow: 0 8px 24px rgb(0 0 0 / .18); padding: 4px; display: grid;
+}
+.status-menu .status-opt {
+  text-align: left; background: none; border: 0; border-radius: calc(var(--radius) - 2px);
+  padding: 7px 9px; font-size: .92rem; color: var(--ink);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.status-menu .status-opt:hover, .status-menu .status-opt.active { background: var(--paper); }
+.status-menu .status-opt.active { outline: 2px solid var(--work-text); outline-offset: -2px; }
+.status-menu .status-menu-sep {
+  margin: 5px 2px 3px; padding-top: 6px; border-top: 1px solid var(--line);
+  font-size: .72rem; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; color: var(--muted);
+}
+.status-menu .status-menu-sep:first-child { margin-top: 2px; padding-top: 0; border-top: 0; }
+.status-menu .status-menu-none { padding: 6px 9px; font-size: .85rem; color: var(--muted); }
+
 /* Time tracking */
 .timer-btn {
   flex: none; align-self: flex-start; display: inline-flex; align-items: center; gap: 4px;
