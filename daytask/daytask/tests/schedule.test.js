@@ -330,6 +330,47 @@ test('extend the work day: button timing, auto switch, extensions', async () => 
   assert.equal(normalizeSettings({ workExtension: { date: 'bad' } }).workExtension, null);
 });
 
+test('Home on top at the end of work hours, Extend day puts Work back', async () => {
+  const { extendWorkDay, endWorkDayNow, extensionKeepsWorkOnTop, workComesBack } = await import('../web/js/core/schedule.js');
+  const flip = normalizeSettings({ timezone: 'America/Chicago', workStart: '08:00', workEnd: '17:00',
+    extendPromptMinutes: 15, extendVisibleMinutes: 30, homeOnTopAt: 'workEnd' });
+  const cst = (hhmm) => new Date(`2026-11-04T${hhmm}:00-06:00`); // a Wednesday
+  const at = (h, s = flip) => scheduleState(cst(h), s);
+  // Before work ends: Work on top with the button up, no "Done for today" yet.
+  assert.deepEqual([at('16:50').mode, at('16:50').showExtend, at('16:50').homeEarly, at('16:50').showEndDay], ['work', true, false, false]);
+  // "Done for today" from the end of work hours until the button goes.
+  assert.deepEqual([at('17:00').showEndDay, at('17:14').showEndDay, at('17:15').showEndDay], [true, true, false]);
+  // At 17:00 Home goes on top, but the button stays until 17:15 and the work day is still open.
+  assert.deepEqual([at('17:00').mode, at('17:00').showExtend, at('17:00').homeEarly], ['home', true, true]);
+  assert.deepEqual([at('17:10').workDayOver, at('17:10').workDate], [false, '2026-11-04']);
+  assert.deepEqual([at('17:15').mode, at('17:15').showExtend, at('17:15').homeEarly], ['home', false, false]);
+  // Pressing Extend day at 17:05 puts Work back on top until 17:35.
+  const ext = { ...flip, workExtension: extendWorkDay(flip, cst('17:05'), 30) };
+  assert.deepEqual([at('17:05', ext).mode, at('17:05', ext).workEnd], ['work', '17:35']);
+  // Extending doesn't hide "Done for today": it stays up through the extension (Extend day is back
+  // from 17:20) and goes when the button does at 17:50.
+  assert.deepEqual([at('17:10', ext).showExtend, at('17:10', ext).showEndDay], [false, true]);
+  assert.deepEqual([at('17:25', ext).showEndDay, at('17:49', ext).showEndDay, at('17:50', ext).showEndDay], [true, true, false]);
+  // Extended before the usual end: still from 17:00, not from the extended end.
+  const early = { ...flip, workExtension: extendWorkDay(flip, cst('16:50'), 30) };
+  assert.deepEqual([at('16:59', early).showEndDay, at('17:00', early).showEndDay], [false, true]);
+  assert.equal(extensionKeepsWorkOnTop(cst('17:10'), ext), true);
+  // ...then Home again at the extended end, with the button up a little longer.
+  assert.deepEqual([at('17:35', ext).mode, at('17:35', ext).showExtend], ['home', true]);
+  // "Done for today" while the button is up: the day ends now and the button doesn't come back.
+  const done = { ...flip, workExtension: endWorkDayNow(flip, cst('17:05')) };
+  assert.deepEqual([at('17:05', done).mode, at('17:05', done).showExtend, at('17:05', done).workDayOver, at('17:05', done).showEndDay], ['home', false, true, false]);
+  assert.equal(at('17:14', done).showExtend, false);
+  // ...also after an extension, before work hours would have ended.
+  const doneExt = { ...ext, workExtension: endWorkDayNow(ext, cst('17:25')) };
+  assert.deepEqual([at('17:25', doneExt).mode, at('17:40', doneExt).showExtend], ['home', false]);
+  // The default keeps the old behaviour; an unknown value falls back to it.
+  assert.equal(at('17:05', { ...flip, homeOnTopAt: 'button' }).mode, 'work');
+  assert.equal(normalizeSettings({ homeOnTopAt: 'x' }).homeOnTopAt, 'button');
+  // Switching the option itself doesn't ask "Move your Work tasks back to the top?".
+  assert.equal(workComesBack(flip, { ...flip, homeOnTopAt: 'button' }, cst('17:05')), false);
+});
+
 test('pushing the work end out after the switch to Home', async () => {
   const { applyWorkHoursChange, workComesBack, endWorkDayNow } = await import('../web/js/core/schedule.js');
   const base = normalizeSettings({ timezone: 'America/Chicago', workEnd: '17:00' });

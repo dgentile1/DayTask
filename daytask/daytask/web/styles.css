@@ -378,6 +378,11 @@ ul.subtasks { list-style: none; margin: -4px 0 0; padding: 0 12px 8px 66px; disp
 .band select[data-ext-amount] option { color: var(--ink); background: var(--surface); }
 .band .ext-custom { display: inline-flex; align-items: center; gap: 4px; font-size: .9rem; }
 .band .ext-custom input { width: 70px; padding: 4px 6px; background: var(--surface); color: var(--ink); }
+.band .end-day-btn {
+  margin-left: auto; border: 1px solid currentColor; background: transparent; color: inherit;
+  border-radius: var(--radius); padding: 4px 10px; font-size: .9rem; font-weight: 700;
+}
+.band .end-day-btn:hover { background: rgba(255, 255, 255, .15); }
 .dialog-buttons.stack { flex-wrap: wrap; }
 
 .reset-day { display: grid; gap: 6px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }

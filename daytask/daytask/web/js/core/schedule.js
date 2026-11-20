@@ -19,6 +19,9 @@ export const DEFAULT_SETTINGS = Object.freeze({
   extendPromptMinutes: 15,   // "Extend day" button appears this long before work ends
   extendVisibleMinutes: 15,  // ...and stays this long before lists switch to Home on their own
   extendDefaultMinutes: 30,  // default time the button adds
+  homeOnTopAt: 'button',     // 'button': Home goes on top when the Extend day button goes away
+                             // 'workEnd': Home goes on top when work hours end; the button stays up
+                             //            its usual time and pressing it puts Work back on top
   workExtension: null,       // today's extension: { date, endTime: 'HH:MM', ended: bool }
   colors: {},                // custom colours by key (see core/colors.js); missing = default
 });
@@ -55,6 +58,7 @@ export function normalizeSettings(raw = {}) {
   if (!['due-only', 'until-due'].includes(s.calendarMode)) s.calendarMode = DEFAULT_SETTINGS.calendarMode;
   if (!['auto', 'light', 'dark'].includes(s.theme)) s.theme = DEFAULT_SETTINGS.theme;
   if (!['open', 'hidden'].includes(s.dueBannerStart)) s.dueBannerStart = DEFAULT_SETTINGS.dueBannerStart;
+  if (!['button', 'workEnd'].includes(s.homeOnTopAt)) s.homeOnTopAt = DEFAULT_SETTINGS.homeOnTopAt;
   // An empty list is a choice (offer only the statuses in use), so only a missing one falls back.
   s.statusList = normalizeStatusList(Array.isArray(s.statusList) ? s.statusList : DEFAULT_SETTINGS.statusList);
   const mins = (v, lo, hi, d) => { const n = Math.round(Number(v)); return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : d; };
@@ -97,7 +101,12 @@ const toHHMM = (min) => { const m = Math.max(0, Math.min(23 * 60 + 59, Math.roun
  *  switchAt   when the lists actually switch to Home today: the "Extend day" button appears
  *             extendPromptMinutes before workEnd and stays extendVisibleMinutes; when it goes, Home
  *             goes on top. With the two equal that's exactly workEnd. Ending a day early switches at once.
+ *  homeEarly  homeOnTopAt 'workEnd' and work hours have ended but the button is still up: Home is
+ *             already on top (mode 'home') while the work day itself stays open until switchAt
  *  showExtend whether the "Extend day" button is up right now
+ *  showEndDay whether "Done for today" is up: from your usual end time (the setting, not an
+ *             extension) until the work day ends, whether by pressing it or by the Extend day button
+ *             going away unpressed. Extending doesn't hide it.
  */
 export function scheduleState(instant, settings) {
   const s = normalizeSettings(settings);
@@ -111,6 +120,7 @@ export function scheduleState(instant, settings) {
   const t = toMin(now.time);
   const isWorkTime = isWorkday && now.time >= s.workStart && now.time < switchAt;
   const workDayStillOpen = isWorkday && now.time < switchAt;
+  const homeEarly = isWorkTime && s.homeOnTopAt === 'workEnd' && now.time >= workEnd;
   return {
     today: now.date,
     time: now.time,
@@ -118,12 +128,14 @@ export function scheduleState(instant, settings) {
     isWorkTime,
     beforeWork: isWorkday && now.time < s.workStart,
     workDayOver: isWorkday && now.time >= switchAt, // today's work day has ended (lists switched to Home)
-    mode: isWorkTime ? 'work' : 'home',
+    mode: isWorkTime && !homeEarly ? 'work' : 'home',
     workDate: workDayStillOpen ? now.date : nextWorkday(now.date, s.workDays),
     workEnd,
     switchAt,
     extended: !!ext && !ext.ended,
+    homeEarly,
     showExtend: isWorkTime && !ext?.ended && t >= promptAt,
+    showEndDay: isWorkTime && !ext?.ended && now.time >= s.workEnd,
   };
 }
 
@@ -359,7 +371,8 @@ export function applyWorkHoursChange(prev, next, instant) {
  * the day had switched to Home and the pushed-out end puts us back in work hours.
  */
 export function workComesBack(prev, next, instant) {
-  const a = scheduleState(instant, prev);
+  // Only hours count here: changing when Home goes on top isn't a reason to ask.
+  const a = scheduleState(instant, { ...prev, homeOnTopAt: normalizeSettings(next).homeOnTopAt });
   const b = scheduleState(instant, next);
   return a.mode === 'home' && b.mode === 'work' && a.isWorkday && !a.beforeWork;
 }

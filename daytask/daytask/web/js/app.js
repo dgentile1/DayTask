@@ -646,10 +646,12 @@ function extendControls() {
   const opts = [`<option value="default"${choice === 'default' ? ' selected' : ''}>+${esc(fmtDur(def))} (default)</option>`,
     ...EXTEND_CHOICES.filter((m) => m !== def).map((m) => `<option value="${m}"${String(choice) === String(m) ? ' selected' : ''}>+${esc(fmtDur(m))}</option>`),
     `<option value="custom"${choice === 'custom' ? ' selected' : ''}>Custom…</option>`];
+  // After an extension "Done for today" can be up on its own, before Extend day comes back.
   return `<div class="extend-row">
-    <button class="extend-btn" data-act="extend-day">Extend day</button>
+    ${state.sched.showExtend ? `<button class="extend-btn" data-act="extend-day">Extend day</button>
     <select data-ext-amount aria-label="How much to add">${opts.join('')}</select>
-    ${choice === 'custom' ? `<label class="ext-custom"><input type="number" data-ext-custom min="1" max="480" step="5" value="${esc(state.extCustom ?? def)}" aria-label="Minutes to add"> min</label>` : ''}
+    ${choice === 'custom' ? `<label class="ext-custom"><input type="number" data-ext-custom min="1" max="480" step="5" value="${esc(state.extCustom ?? def)}" aria-label="Minutes to add"> min</label>` : ''}` : ''}
+    ${state.sched.showEndDay ? `<button class="end-day-btn" data-act="end-day" title="Done for today: Home goes on top and Extend day doesn't come back today">Done for today <span aria-hidden="true">✕</span></button>` : ''}
   </div>`;
 }
 
@@ -660,7 +662,8 @@ function renderBand() {
   const s = state.sched;
   const set = state.settings;
   let modeText;
-  if (s.isWorkTime && s.time >= s.workEnd) modeText = `Work hours ended ${formatClock(s.workEnd)}. Home at ${formatClock(s.switchAt)}`;
+  if (s.homeEarly) modeText = `Work hours ended ${formatClock(s.workEnd)}. Home is on top. Extend day by ${formatClock(s.switchAt)} to put Work back`;
+  else if (s.isWorkTime && s.time >= s.workEnd) modeText = `Work hours ended ${formatClock(s.workEnd)}. Home at ${formatClock(s.switchAt)}`;
   else if (s.isWorkTime && s.extended) modeText = `Work hours until ${formatClock(s.workEnd)} (extended)`;
   else if (s.isWorkTime) modeText = `Work hours until ${formatClock(s.workEnd)}`;
   else if (s.beforeWork) modeText = `Before work, starts ${formatClock(set.workStart)}`;
@@ -671,7 +674,7 @@ function renderBand() {
   band.innerHTML = `
     <div class="day">${esc(formatDay(s.today, { weekday: 'long', month: 'short', day: 'numeric' }))}</div>
     <div class="mode">${esc(modeText)}</div>
-    ${s.showExtend ? extendControls() : ''}
+    ${s.showExtend || s.showEndDay ? extendControls() : ''}
     <div class="sync-slot" aria-live="polite">${syncPill()}</div>
     <div class="tools">
       ${bandTimer()}
@@ -1260,15 +1263,21 @@ function settingsHtml() {
     <h2>End of the work day</h2>
     <label>Show the Extend day button this many minutes before work ends
       <input type="number" name="extendPromptMinutes" min="1" max="120" step="1" value="${esc(s.extendPromptMinutes)}" required></label>
-    <label>Keep the button up this many minutes before switching to Home on its own
+    <label>Keep the button up this many minutes before it goes away on its own
       <input type="number" name="extendVisibleMinutes" min="1" max="240" step="1" value="${esc(s.extendVisibleMinutes)}" required></label>
     <label>Default time Extend day adds (minutes)
       <input type="number" name="extendDefaultMinutes" min="5" max="480" step="5" value="${esc(s.extendDefaultMinutes)}" required></label>
+    <fieldset class="radio-set">
+      <legend>Home tasks go on top</legend>
+      <label><input type="radio" name="homeOnTopAt" value="button" ${s.homeOnTopAt !== 'workEnd' ? 'checked' : ''}> When the Extend day button goes away</label>
+      <label><input type="radio" name="homeOnTopAt" value="workEnd" ${s.homeOnTopAt === 'workEnd' ? 'checked' : ''}> When work hours end (the button stays up, and pressing it puts Work back on top)</label>
+    </fieldset>
     <p class="hint" style="margin:0">${esc((() => {
       const end = s.workEnd.split(':').map(Number); const e = end[0] * 60 + end[1];
       const at = (m) => formatClock(`${String(Math.floor(m / 60) % 24).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`);
-      const shown = e - s.extendPromptMinutes, home = shown + s.extendVisibleMinutes;
-      return `With these settings the button appears at ${at(shown)} and Home goes on top at ${at(home)} unless you extend.`;
+      const shown = e - s.extendPromptMinutes, gone = shown + s.extendVisibleMinutes;
+      if (s.homeOnTopAt === 'workEnd' && gone > e) return `With these settings the button appears at ${at(shown)}, Home goes on top at ${at(e)}, and the button stays up until ${at(gone)}. Pressing it before then puts Work back on top.`;
+      return `With these settings the button appears at ${at(shown)} and Home goes on top at ${at(gone)} unless you extend.`;
     })())}</p>
     <div class="reset-day">
       <p class="hint" style="margin:0" id="day-order-now">Right now: ${esc(dayOrderSummary())}</p>
@@ -1537,6 +1546,12 @@ function wireView() {
         document.activeElement?.blur();
         const ext = extendWorkDay(state.settings, new Date(), minutes);
         guarded(async () => { await saveExtension(ext); toast(`Work day extended to ${formatClock(ext.endTime)}`); });
+        break;
+      }
+      case 'end-day': {
+        // Done for today: the work day ends now, so Home goes on top and the button stays away.
+        document.activeElement?.blur();
+        guarded(async () => { await saveExtension(endWorkDayNow(state.settings, new Date())); toast('Done for today. Home tasks are on top'); });
         break;
       }
       case 'reset-day-order': guarded(resetDayOrder); break;
@@ -1816,6 +1831,7 @@ function readSettingsForm(form) {
       granolaAliases: f.aliases.value.split(',').map((a) => a.trim()).filter(Boolean),
       dueSoonDays: Number(f.dueSoonDays.value),
       dueBannerStart: f.dueBannerStart.value,
+      homeOnTopAt: f.homeOnTopAt.value,
       statusList: f.statusList.value.split('\n'), // normalizeSettings tidies, de-duplicates and caps it
       theme: f.theme.value,
       colors: formColors(form),
@@ -1857,6 +1873,7 @@ function dayOrderSummary() {
   if (!st.isWorkday) return 'Home is on top. Today isn\'t a work day.';
   if (st.beforeWork) return `Home is on top until work starts at ${formatClock(set.workStart)}.`;
   if (ext?.ended) return `Home is on top. You switched to Home at ${formatClock(ext.endTime)}.`;
+  if (st.homeEarly) return `Home is on top. Work ended at ${formatClock(st.workEnd)}; Extend day until ${formatClock(st.switchAt)} puts Work back.`;
   return `Home is on top. Work ended at ${formatClock(st.switchAt === '24:00' ? '23:59' : st.switchAt)}.`;
 }
 
