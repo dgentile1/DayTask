@@ -443,6 +443,13 @@ li.sub .sub-title-btn { flex: 1; min-width: 0; }
 
 .toggle.status-toggle[aria-pressed="true"] { background: var(--status); border-color: var(--status); color: var(--surface); }
 .name-status .name-field:only-child { flex-basis: 100%; }
+/* Status button / × sit at the right end of the Task name row, the same height as the boxes */
+.name-status .status-toggle, .name-status .status-clear { flex: none; align-self: flex-end; height: calc(.85rem * 1.4 + 18px); }
+.status-clear {
+  border: 1px solid var(--line); background: transparent; color: var(--muted); border-radius: var(--radius);
+  padding: 0 10px; font-size: 1.1rem; line-height: 1;
+}
+.status-clear:hover { color: var(--ink); border-color: var(--ink); }
 
 /* The status dropdown: matches on top, then a divider, then every status available */
 .status-menu {

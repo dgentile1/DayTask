@@ -658,6 +658,8 @@ function wireStatusMenu() {
     if (opt) { e.preventDefault(); pickStatus(Number(opt.dataset.i)); return; }
     if (!e.target.closest?.('[data-status-input], #status-menu')) closeStatusMenu();
   });
+  // The × beside a Status box acts on what's typed, so pressing it mustn't blur (and save) the box first.
+  document.addEventListener('mousedown', (e) => { if (e.target.closest?.('[data-act="status-clear"]')) e.preventDefault(); });
   window.addEventListener('resize', placeStatusMenu);
   document.addEventListener('scroll', placeStatusMenu, true);
 }
@@ -889,7 +891,10 @@ function editor(t) {
     <div class="editor">
       <div class="name-status">
         <label class="name-field">Task<input type="text" data-field="title" value="${esc(t.title)}" maxlength="500"></label>
-        ${showTaskStatus(t) ? `<label class="status-field">Status<input type="text" data-field="status" value="${esc(t.status || '')}" data-status-input maxlength="60" placeholder="e.g. Waiting" autocomplete="off"></label>` : ''}
+        ${showTaskStatus(t)
+          ? `<label class="status-field">Status<input type="text" data-field="status" value="${esc(t.status || '')}" data-status-input maxlength="60" placeholder="e.g. Waiting" autocomplete="off"></label>
+        <button type="button" class="status-clear" data-act="status-clear" aria-label="Clear the status, or remove it when empty" title="Clear the status (when empty, remove it)">×</button>`
+          : '<button class="toggle status-toggle" data-act="status-toggle" aria-pressed="false" title="Show a status beside the name">Status</button>'}
       </div>
       <label>Note<textarea data-field="note" rows="3" placeholder="Context, links, who asked">${esc(t.note)}</textarea></label>
       <div class="line">
@@ -909,7 +914,6 @@ function editor(t) {
           <button data-act="prio" data-val="normal" ${pressed(t.priority, 'normal')}>Normal</button>
           <button data-act="prio" data-val="high" ${pressed(t.priority, 'high')}>High</button>
         </div>
-        <button class="toggle status-toggle" data-act="status-toggle" aria-pressed="${showTaskStatus(t)}" title="Show a status beside the name">Status</button>
       </div>
       <div class="sub-editor">
         <div class="sub-editor-head">Subtasks
@@ -1608,6 +1612,26 @@ function wireView() {
           statusOpen.add(key);
           focusAfterRender = `.task[data-id="${CSS.escape(id)}"] input[data-field="status"]`;
           render({ force: true });
+        }
+        break;
+      }
+      case 'status-clear': {
+        // × beside the Status box: text in it → empty it (box stays, ready for another);
+        // already empty → remove the status and bring the Status button back.
+        const t = find(id); const key = `task:${id}`;
+        const input = btn.closest('.name-status')?.querySelector('input[data-field="status"]');
+        const sel = `.task[data-id="${CSS.escape(id)}"] input[data-field="status"]`;
+        if (input && input.value.trim()) {
+          input.value = '';
+          statusOpen.add(key);
+          if (t.status) { focusAfterRender = sel; guarded(async () => { await patchTask(id, { status: null }); render({ force: true }); }); }
+          if (statusMenu.input === input && statusMenuOpen()) drawStatusMenu();
+          input.focus();
+        } else {
+          statusOpen.delete(key);
+          closeStatusMenu();
+          if (t.status) guarded(async () => { await patchTask(id, { status: null }); render({ force: true }); });
+          else render({ force: true });
         }
         break;
       }

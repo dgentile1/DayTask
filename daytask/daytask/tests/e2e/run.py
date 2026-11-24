@@ -647,7 +647,7 @@ with sync_playwright() as p:
     before = {r['id']: r['due_date'] for r in db['tasks']}
     eve = open_page(browser, 390, 844, '2026-11-02T23:30:00Z', 'evening', scheme='dark')  # 17:30 CST
     check('home' in eve.get_attribute('#band', 'class'), 'after hours => green home band')
-    order = eve.eval_on_selector_all('#view .section h2', 'e => e.map(x => (x.querySelector('.section-title') || x.firstChild).textContent.trim())')
+    order = eve.eval_on_selector_all('#view .section h2', 'e => e.map(x => (x.querySelector(".section-title") || x.firstChild).textContent.trim())')
     check(order[:2] == ['Home', 'Work, for the next work day'], f'home first, work below after hours: {order}')
     mine = [t for t in titles(eve, 'work') if t in ('Review Lyra crash fix', 'Flash test units', 'Send AGS quote')]
     check(mine == ['Review Lyra crash fix', 'Flash test units', 'Send AGS quote'], f'manual work order intact after hours: {titles(eve, "work")}')
@@ -1044,7 +1044,7 @@ with sync_playwright() as p:
     name_w = boxes(sp, li('Order relay').locator('input[data-field="title"]'))[0]['width']
     check(li('Order relay').locator('input[data-field="status"]').count() == 0
           and li('Order relay').locator('[data-act="status-toggle"]').get_attribute('aria-pressed') == 'false',
-          'editor: no Status box until the Status toggle is on; Task name keeps its full width')
+          'editor: no Status box until the Status button is pressed')
     li('Order relay').locator('[data-act="status-toggle"]').click(); sp.wait_for_timeout(200)
     box = li('Order relay').locator('input[data-field="status"]')
     check(beside(sp, li('Order relay').locator('input[data-field="title"]'), box) and sp.evaluate("document.activeElement?.dataset?.field") == 'status'
@@ -1116,6 +1116,25 @@ with sync_playwright() as p:
     li('Order relay').locator('[data-act="expand"]').click(); sp.wait_for_timeout(200)
     check(li('Order relay').locator('input[data-field="status"]').count() == 0
           and li('Order relay').locator('[data-act="status-toggle"]').get_attribute('aria-pressed') == 'false', 'and its box hides again')
+    # The Status button sits right of the Task name; with a box showing, × clears it, then removes it.
+    ns = li('Order relay').locator('.name-status')
+    check(ns.locator('[data-act="status-toggle"]').count() == 1 and li('Order relay').locator('.line [data-act="status-toggle"]').count() == 0
+          and beside(sp, li('Order relay').locator('input[data-field="title"]'), ns.locator('[data-act="status-toggle"]')),
+          'editor: Status button right of the Task name, not with Priority')
+    ns.locator('[data-act="status-toggle"]').click(); sp.wait_for_timeout(200)
+    box = li('Order relay').locator('input[data-field="status"]')
+    box.fill('On hold'); box.press('Tab'); sp.wait_for_timeout(400)
+    check(row('Order relay')['status'] == 'On hold' and ns.locator('[data-act="status-clear"]').count() == 1
+          and ns.locator('[data-act="status-toggle"]').count() == 0, 'with a status showing: × beside the box, no Status button')
+    ns.locator('[data-act="status-clear"]').click(); sp.wait_for_timeout(400)
+    check(box.count() == 1 and box.input_value() == '' and row('Order relay')['status'] is None
+          and sp.evaluate("document.activeElement?.dataset?.field") == 'status', '× with text: empties the box and clears the status, box stays')
+    box.type('Typed, not saved'); ns.locator('[data-act="status-clear"]').click(); sp.wait_for_timeout(400)
+    check(box.count() == 1 and box.input_value() == '' and row('Order relay')['status'] is None, '× with unsaved text: empties it without saving it')
+    ns.locator('[data-act="status-clear"]').click(); sp.wait_for_timeout(400)
+    check(box.count() == 0 and ns.locator('[data-act="status-clear"]').count() == 0
+          and ns.locator('[data-act="status-toggle"]').get_attribute('aria-pressed') == 'false', '× when empty: removes the box, Status button back')
+    li('Order relay').locator('[data-act="collapse"]').click(); sp.wait_for_timeout(200)
     # Toggle off with a status set removes it.
     li('Send AGS quote').locator('[data-act="expand"]').click(); sp.wait_for_timeout(200)
     sub_row = li('Send AGS quote').locator('li.sub-edit', has=sp.locator('input[data-sub-status]'))
@@ -1331,7 +1350,7 @@ with sync_playwright() as p:
 
     # App list.
     ap = open_page(browser, 400, 1400, '2026-11-03T16:00:00Z', 'app-list')  # Tue 10:00
-    def sec_titles(pg): return pg.eval_on_selector_all('#view > .section > h2', 'e => e.map(x => (x.querySelector('.section-title') || x.firstChild).textContent.trim())')
+    def sec_titles(pg): return pg.eval_on_selector_all('#view > .section > h2', 'e => e.map(x => (x.querySelector(".section-title") || x.firstChild).textContent.trim())')
     check('App' not in sec_titles(ap), 'no App section until something is in it')
     ap.click('#add [data-ctx="app"]')
     check(ap.get_attribute('#add [data-ctx="app"]', 'aria-pressed') == 'true' and not ap.locator('#add [data-daily]').is_visible(),
