@@ -659,7 +659,7 @@ function wireStatusMenu() {
     if (!e.target.closest?.('[data-status-input], #status-menu')) closeStatusMenu();
   });
   // The × beside a Status box acts on what's typed, so pressing it mustn't blur (and save) the box first.
-  document.addEventListener('mousedown', (e) => { if (e.target.closest?.('[data-act="status-clear"]')) e.preventDefault(); });
+  document.addEventListener('mousedown', (e) => { if (e.target.closest?.('.status-clear')) e.preventDefault(); });
   window.addEventListener('resize', placeStatusMenu);
   document.addEventListener('scroll', placeStatusMenu, true);
 }
@@ -925,14 +925,16 @@ function editor(t) {
             <span class="sub-drag" aria-hidden="true" title="Drag to reorder">⋮⋮</span>
             <input type="checkbox" class="sub-check" data-act="sub-done" ${s.done ? 'checked' : ''} aria-label="Done">
             <input type="text" data-sub-title value="${esc(s.title)}" maxlength="500" aria-label="Subtask">
-            ${showSubStatus(t, s) ? `<input type="text" data-sub-status data-status-input value="${esc(s.status || '')}" maxlength="60" placeholder="Status" aria-label="Status for ${esc(s.title)}" autocomplete="off">` : ''}
-            <button class="sub-del" data-act="sub-del" aria-label="Remove subtask ${esc(s.title)}">×</button>
+            ${showSubStatus(t, s)
+              ? `<input type="text" data-sub-status data-status-input value="${esc(s.status || '')}" maxlength="60" placeholder="Status" aria-label="Status for ${esc(s.title)}" autocomplete="off">
+            <button type="button" class="status-clear" data-act="sub-status-clear" aria-label="Clear the status for ${esc(s.title)}, or remove it when empty" title="Clear the status (when empty, remove it)">×</button>`
+              : '<button class="toggle status-toggle" data-act="sub-status-toggle" aria-pressed="false" title="Show a status beside the name">Status</button>'}
             <div class="sub-opts">
               <label class="date-pick">Due <input type="date" data-sub-due value="${esc(s.dueDate || '')}" aria-label="Subtask due date (optional)"></label>
               <button class="toggle" data-act="sub-prio" aria-pressed="${s.priority === 'high'}" title="High priority">High</button>
-              <button class="toggle status-toggle" data-act="sub-status-toggle" aria-pressed="${showSubStatus(t, s)}" title="Show a status beside the name">Status</button>
               ${s.done ? '<button class="toggle" data-act="sub-archive" title="Archive: take it off the list, keep the record">Archive</button>' : ''}
               ${(() => { const d = !s.done && dueLabel(s); return d && d.cls !== 'due-later' ? `<span class="meta"><span class="${d.cls}">${esc(d.text)}</span></span>` : ''; })()}
+              <button class="sub-delete" data-act="sub-del" aria-label="Delete subtask ${esc(s.title)}" title="Delete this subtask for good">Delete</button>
             </div>
           </li>`).join('')}</ul>` : ''}
         ${archived.length ? `
@@ -1698,7 +1700,39 @@ function wireView() {
       }
       case 'sub-del': {
         const subId = btn.closest('[data-sub]').dataset.sub;
-        guarded(async () => { await stopSubTimerIfFor(id, subId); await changeSubtasks(id, (l) => removeSubtask(l, subId)); });
+        // Delete for good, with a moment to take it back (same place, same id, so its time still matches).
+        const t = find(id);
+        const list = isDaily(t) ? dailySubtasks(t, state.sched.today) : (t.subtasks || []);
+        const at = list.findIndex((x) => x.id === subId); const gone = list[at];
+        if (!gone) break;
+        guarded(async () => {
+          await stopSubTimerIfFor(id, subId);
+          await changeSubtasks(id, (l) => removeSubtask(l, subId));
+          toast(`Deleted: ${gone.title}`, { label: 'Undo', run: () => guarded(() => changeSubtasks(id, (l) => {
+            if (l.some((x) => x.id === subId)) return l;
+            const c = [...l]; c.splice(Math.min(at, c.length), 0, gone); return c;
+          })) });
+        });
+        break;
+      }
+      case 'sub-status-clear': {
+        // × beside a subtask's Status box: same as the task's — empty it, then (when empty) remove it.
+        const t = find(id); const subId = btn.closest('[data-sub]').dataset.sub;
+        const st = (t.subtasks || []).find((x) => x.id === subId); const key = `sub:${id}:${subId}`;
+        const input = btn.closest('[data-sub]').querySelector('input[data-sub-status]');
+        const sel = `.task[data-id="${CSS.escape(id)}"] li.sub-edit[data-sub="${CSS.escape(subId)}"] input[data-sub-status]`;
+        const clear = (l) => updateSubtask(l, subId, { status: null });
+        if (input && input.value.trim()) {
+          input.value = '';
+          statusOpen.add(key);
+          if (st?.status) guarded(() => changeSubtasks(id, clear, { refocus: sel }));
+          input.focus();
+        } else {
+          statusOpen.delete(key);
+          closeStatusMenu();
+          if (st?.status) guarded(async () => { await changeSubtasks(id, clear); render({ force: true }); });
+          else render({ force: true });
+        }
         break;
       }
       case 'sub-archive': {

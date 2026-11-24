@@ -289,7 +289,14 @@ ul.subtasks { list-style: none; margin: -4px 0 0; padding: 0 12px 8px 66px; disp
 .sub-opts .meta { margin-top: 0; }
 .sub-edit input[type=text] { padding: 5px 8px; }
 .sub-drag { color: var(--muted); cursor: grab; touch-action: none; user-select: none; letter-spacing: -2px; padding: 0 2px; }
-.sub-del { flex: none; background: none; border: 0; color: var(--muted); font-size: 1.2rem; line-height: 1; padding: 2px 6px; }
+.sub-edit > .status-toggle { flex: none; padding: 3px 9px; font-size: .85rem; }
+.sub-edit > .status-clear { flex: none; align-self: stretch; padding: 0 8px; font-size: 1rem; }
+/* Delete sits at the right end of a subtask's options: removes it for good (Undo in the toast) */
+.sub-delete {
+  flex: none; margin-left: auto; background: none; border: 1px solid transparent; color: var(--danger);
+  border-radius: var(--radius); padding: 3px 9px; font-size: .85rem;
+}
+.sub-delete:hover { border-color: var(--danger); }
 /* Archiving: a finished subtask leaves the list but keeps its record (and its time) */
 .sub-archive {
   flex: none; align-self: flex-start; margin-top: 2px; border: 1px solid var(--line); background: var(--surface);

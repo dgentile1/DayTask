@@ -335,8 +335,12 @@ with sync_playwright() as p:
     ed.locator('li.sub-edit', has=desk.locator('input[value="Email Marcus for review"]')).locator('[data-sub-title]').fill('Email Marcus the draft')
     ed.locator('li.sub-edit').nth(1).locator('[data-sub-title]').press('Tab'); desk.wait_for_timeout(300)
     check('Email Marcus the draft' in [x[0] for x in subs_of('Send AGS quote')], f'rename subtask: {subs_of("Send AGS quote")}')
+    before_del = [x[0] for x in subs_of('Send AGS quote')]
     ed.locator('li.sub-edit', has=desk.locator('input[value="Add disclaimer language"]')).locator('[data-act="sub-del"]').click(); desk.wait_for_timeout(300)
     check([x[0] for x in subs_of('Send AGS quote')] == ['Email Marcus the draft', 'Pull current pricing'], f'remove subtask: {subs_of("Send AGS quote")}')
+    desk.click('#toast button'); desk.wait_for_timeout(400)
+    check([x[0] for x in subs_of('Send AGS quote')] == before_del, f'Undo puts a deleted subtask back in its place: {subs_of("Send AGS quote")}')
+    ed.locator('li.sub-edit', has=desk.locator('input[value="Add disclaimer language"]')).locator('[data-act="sub-del"]').click(); desk.wait_for_timeout(300)
     # Drag reorder inside the editor.
     ed = desk.locator('li.task', has_text='Send AGS quote')
     src = ed.locator('li.sub-edit').nth(1).locator('.sub-drag'); dst = ed.locator('li.sub-edit').nth(0)
@@ -1075,12 +1079,12 @@ with sync_playwright() as p:
     check(first_sub.locator('input[data-sub-status]').count() == 0, 'subtask rows: no Status box until toggled')
     first_sub.locator('[data-act="sub-status-toggle"]').click(); sp.wait_for_timeout(200)
     sb = li('Send AGS quote').locator('li.sub-edit').first.locator('input[data-sub-status]')
-    check(sb.is_visible() and sp.evaluate("document.activeElement?.hasAttribute('data-sub-status')"), 'subtask Status toggle opens its box, ready to type')
+    check(sb.is_visible() and sp.evaluate("document.activeElement?.hasAttribute('data-sub-status')"), 'subtask Status button opens its box, ready to type')
     li('Send AGS quote').screenshot(path=os.path.join(HERE, 'toggle-editor.png'))
     one_line = sp.evaluate("""() => [...document.querySelectorAll('li.sub-edit .sub-opts')].every((o) => {
       const tops = [...o.children].filter((c) => c.offsetParent).map((c) => Math.round(c.getBoundingClientRect().top + c.getBoundingClientRect().height / 2));
       return Math.max(...tops) - Math.min(...tops) < 8; })""")
-    check(one_line, 'subtask Due, High and Status toggles fit on one line')
+    check(one_line, 'subtask Due, High and Delete fit on one line')
     check(beside(sp, li('Send AGS quote').locator('li.sub-edit').first.locator('[data-sub-title]'), sb), 'subtask Status box right of its name, same line')
     check(sp.evaluate("getComputedStyle(document.querySelector('li.sub-edit.done input[data-sub-status]')).textDecorationLine") == 'none',
           'a done subtask crosses out its name, not its Status box')
@@ -1135,13 +1139,22 @@ with sync_playwright() as p:
     check(box.count() == 0 and ns.locator('[data-act="status-clear"]').count() == 0
           and ns.locator('[data-act="status-toggle"]').get_attribute('aria-pressed') == 'false', '× when empty: removes the box, Status button back')
     li('Order relay').locator('[data-act="collapse"]').click(); sp.wait_for_timeout(200)
-    # Toggle off with a status set removes it.
+    # A subtask's × works like the task's: empty the box, then remove it. The subtask itself stays.
     li('Send AGS quote').locator('[data-act="expand"]').click(); sp.wait_for_timeout(200)
-    sub_row = li('Send AGS quote').locator('li.sub-edit', has=sp.locator('input[data-sub-status]'))
-    check(sub_row.locator('[data-act="sub-status-toggle"]').get_attribute('aria-pressed') == 'true', 'a subtask with a status shows its toggle on')
-    sub_row.locator('[data-act="sub-status-toggle"]').click(); sp.wait_for_timeout(400)
-    check(all(not x.get('status') for x in row('Send AGS quote')['subtasks'])
-          and li('Send AGS quote').locator('input[data-sub-status]').count() == 0, 'turning a subtask toggle off removes its status')
+    n_subs = len(row('Send AGS quote')['subtasks'])
+    sub_row = li('Send AGS quote').locator('li.sub-edit', has=sp.locator('input[data-sub-status]')).first
+    sub_id = sub_row.get_attribute('data-sub')
+    sub_row = li('Send AGS quote').locator(f'li.sub-edit[data-sub="{sub_id}"]')
+    check(sub_row.locator('[data-act="sub-status-clear"]').count() == 1 and sub_row.locator('[data-act="sub-status-toggle"]').count() == 0
+          and beside(sp, sub_row.locator('input[data-sub-status]'), sub_row.locator('[data-act="sub-status-clear"]')),
+          'a subtask with a status: × right of its Status box, no Status button')
+    sub_row.locator('[data-act="sub-status-clear"]').click(); sp.wait_for_timeout(400)
+    check(sub_row.locator('input[data-sub-status]').input_value() == '' and all(not x.get('status') for x in row('Send AGS quote')['subtasks'])
+          and len(row('Send AGS quote')['subtasks']) == n_subs, 'subtask × with text: empties the box and clears the status, subtask kept')
+    sub_row.locator('[data-act="sub-status-clear"]').click(); sp.wait_for_timeout(400)
+    check(sub_row.locator('input[data-sub-status]').count() == 0 and sub_row.locator('[data-act="sub-status-toggle"]').count() == 1
+          and len(row('Send AGS quote')['subtasks']) == n_subs, 'subtask × when empty: removes the box, Status button back, subtask kept')
+    check(sub_row.locator('.sub-opts [data-act="sub-del"]').inner_text() == 'Delete', 'Delete is on the subtask options row')
     li('Send AGS quote').locator('[data-act="collapse"]').click(); sp.wait_for_timeout(200)
     sp.screenshot(path=os.path.join(HERE, 'status.png'), full_page=True)
     # Colour.
