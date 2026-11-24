@@ -647,7 +647,7 @@ with sync_playwright() as p:
     before = {r['id']: r['due_date'] for r in db['tasks']}
     eve = open_page(browser, 390, 844, '2026-11-02T23:30:00Z', 'evening', scheme='dark')  # 17:30 CST
     check('home' in eve.get_attribute('#band', 'class'), 'after hours => green home band')
-    order = eve.eval_on_selector_all('#view .section h2', 'e => e.map(x => x.firstChild.textContent.trim())')
+    order = eve.eval_on_selector_all('#view .section h2', 'e => e.map(x => (x.querySelector('.section-title') || x.firstChild).textContent.trim())')
     check(order[:2] == ['Home', 'Work, for the next work day'], f'home first, work below after hours: {order}')
     mine = [t for t in titles(eve, 'work') if t in ('Review Lyra crash fix', 'Flash test units', 'Send AGS quote')]
     check(mine == ['Review Lyra crash fix', 'Flash test units', 'Send AGS quote'], f'manual work order intact after hours: {titles(eve, "work")}')
@@ -1331,7 +1331,7 @@ with sync_playwright() as p:
 
     # App list.
     ap = open_page(browser, 400, 1400, '2026-11-03T16:00:00Z', 'app-list')  # Tue 10:00
-    def sec_titles(pg): return pg.eval_on_selector_all('#view > .section > h2', 'e => e.map(x => x.firstChild.textContent.trim())')
+    def sec_titles(pg): return pg.eval_on_selector_all('#view > .section > h2', 'e => e.map(x => (x.querySelector('.section-title') || x.firstChild).textContent.trim())')
     check('App' not in sec_titles(ap), 'no App section until something is in it')
     ap.click('#add [data-ctx="app"]')
     check(ap.get_attribute('#add [data-ctx="app"]', 'aria-pressed') == 'true' and not ap.locator('#add [data-daily]').is_visible(),

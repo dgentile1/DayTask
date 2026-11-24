@@ -411,3 +411,16 @@ test('App list: its own section after Work and Home, carried over like Home', as
   assert.deepEqual(['work', 'home', 'app', null].map(contextLabel), ['Work', 'Home', 'App', 'Needs sorting']);
   assert.deepEqual(listSiblings(tasks, 'app').map((t) => t.id), ['a1', 'a2']);
 });
+
+test('collapsedAfterFlip: Work on top opens Work; Home on top folds Work and opens Home', async () => {
+  const { collapsedAfterFlip } = await import('../web/js/core/schedule.js');
+  const sorted = (s) => [...s].sort();
+  // Work day ends: Work folds away, Home opens, App is left alone.
+  assert.deepEqual(sorted(collapsedAfterFlip(['home', 'app'], 'work', 'home')), ['app', 'work']);
+  // Work comes back on top (morning, or Extend day): Work opens, Home left as it is.
+  assert.deepEqual(sorted(collapsedAfterFlip(['work', 'app'], 'home', 'work')), ['app']);
+  assert.deepEqual(sorted(collapsedAfterFlip(['work', 'home'], 'home', 'work')), ['home']);
+  // No flip, or nothing known yet: unchanged.
+  assert.deepEqual(sorted(collapsedAfterFlip(['work'], 'home', 'home')), ['work']);
+  assert.deepEqual(sorted(collapsedAfterFlip(['home'], null, 'home')), ['home']);
+});

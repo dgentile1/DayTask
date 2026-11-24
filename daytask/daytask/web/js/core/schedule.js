@@ -400,6 +400,19 @@ export function switchMinutesFor(day, settings) {
   return Math.min(switchMin, 24 * 60);
 }
 
+/**
+ * Which Today sections ('work' / 'home' / 'app') are collapsed once the lists flip.
+ * Work going on top opens Work. Home going on top (the work day is over, or ended early)
+ * folds Work away and opens Home. No flip, or no earlier mode known: left as they are.
+ */
+export function collapsedAfterFlip(collapsed, prevMode, mode) {
+  const next = new Set(collapsed);
+  if (!prevMode || prevMode === mode) return next;
+  if (mode === 'work') next.delete('work');
+  else { next.add('work'); next.delete('home'); }
+  return next;
+}
+
 /** The App list: ideas and updates for this app. Same as other tasks, minus timers and Repeats. */
 export const isAppTask = (t) => t?.context === 'app';
 export const CONTEXTS = ['work', 'home', 'app'];

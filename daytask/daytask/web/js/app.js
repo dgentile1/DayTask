@@ -1,7 +1,7 @@
 import * as store from './data/store.js'; // sign-in and live updates
 import * as sync from './data/sync.js';   // all task/settings reads and writes (offline-first)
 import {
-  normalizeSettings, scheduleState, buildTodayView, listSiblings, dueStatus, dueSoonItems, tasksForDay, dailyForDay, carryInfo, dragGroup, isAppTask, contextLabel, extendWorkDay, endWorkDayNow, extensionKeepsWorkOnTop, applyWorkHoursChange, workComesBack,
+  normalizeSettings, scheduleState, buildTodayView, listSiblings, dueStatus, dueSoonItems, tasksForDay, dailyForDay, carryInfo, dragGroup, isAppTask, contextLabel, extendWorkDay, endWorkDayNow, extensionKeepsWorkOnTop, applyWorkHoursChange, workComesBack, collapsedAfterFlip,
   initialSortKey, sortKeyBetween, renormalizeKeys, bySortKey, resolveTimeZone, MAX_STATUS_LIST,
 } from './core/schedule.js';
 import { addDays, monthGrid, formatDay, formatClock } from './core/dates.js';
@@ -59,6 +59,31 @@ const folded = new Set((() => { try { return JSON.parse(localStorage.getItem(FOL
 function setFolded(id, isFolded) {
   if (isFolded) folded.add(id); else folded.delete(id);
   try { localStorage.setItem(FOLDED_KEY, JSON.stringify([...folded])); } catch { /* storage unavailable */ }
+}
+// Which Today sections (work / home / app) are collapsed, and the mode they were last set for,
+// so a flip that happened while the app was closed is still applied on the next launch. Per device.
+const SECTIONS_KEY = 'daytask.collapsedSections';
+const COLLAPSIBLE = ['work', 'home', 'app'];
+const sectionState = (() => {
+  try {
+    const raw = JSON.parse(localStorage.getItem(SECTIONS_KEY) || '{}');
+    return { collapsed: new Set((raw.collapsed || []).filter((k) => COLLAPSIBLE.includes(k))), mode: raw.mode || null };
+  } catch { return { collapsed: new Set(), mode: null }; }
+})();
+function saveSections() {
+  try { localStorage.setItem(SECTIONS_KEY, JSON.stringify({ collapsed: [...sectionState.collapsed], mode: sectionState.mode })); } catch { /* storage unavailable */ }
+}
+function setSectionCollapsed(key, isCollapsed) {
+  if (isCollapsed) sectionState.collapsed.add(key); else sectionState.collapsed.delete(key);
+  saveSections();
+}
+/** When Work or Home goes on top, open that list (and fold Work away once the work day is over). */
+function syncSectionsToMode() {
+  const mode = state.sched?.mode;
+  if (!mode || mode === sectionState.mode) return;
+  sectionState.collapsed = collapsedAfterFlip(sectionState.collapsed, sectionState.mode, mode);
+  sectionState.mode = mode;
+  saveSections();
 }
 let renderPending = false;
 let unsubscribe = null;
@@ -120,6 +145,7 @@ async function applySchedule() {
   const prevMode = state.sched?.mode;
   state.sched = scheduleState(new Date(), state.settings);
   if (prevMode && prevMode !== state.sched.mode && !state.addCtxTouched) state.addCtx = state.sched.mode;
+  syncSectionsToMode();
   maybeSendDailyReminder();
   maybeAutoStopTimer();
 }
@@ -929,7 +955,7 @@ function editor(t) {
     </div>`;
 }
 
-function section(key, title, tasks, { secondary = false, emptyText = null, sortable = true, daily = [], dailyDone = 0, dailyDay = null } = {}) {
+function section(key, title, tasks, { secondary = false, emptyText = null, sortable = true, daily = [], dailyDone = 0, dailyDay = null, collapsible = false } = {}) {
   if (!tasks.length && !daily.length && !emptyText) return '';
   // Daily tasks: their own block at the top of the list, only once there's at least one.
   const dailyBlock = daily.length ? `
@@ -938,6 +964,24 @@ function section(key, title, tasks, { secondary = false, emptyText = null, sorta
         ? `${dailyDone} of ${daily.length} done today` : `${daily.length} daily`}</span></h3>
       <ul class="tasks sortable daily-list" data-list="daily-${key}">${daily.map((t) => taskRow(t, { drag: true, dailyDay })).join('')}</ul>
     </div>` : '';
+  // Today's Work, Home and App lists fold up under their heading; the count stays visible.
+  if (collapsible) {
+    const isCollapsed = sectionState.collapsed.has(key);
+    const count = tasks.length + daily.length;
+    const head = `<h2><button class="section-toggle" data-act="toggle-section" data-section="${esc(key)}" aria-expanded="${!isCollapsed}" aria-controls="section-${esc(key)}">
+      <span class="chev" aria-hidden="true">▾</span><span class="section-title">${esc(title)}</span> <span class="count">${count || ''}</span></button></h2>`;
+    if (isCollapsed) return `<section class="section collapsed${secondary ? ' secondary' : ''}">${head}<div id="section-${esc(key)}" hidden></div></section>`;
+    return `
+  <section class="section${secondary ? ' secondary' : ''}">
+    ${head}
+    <div id="section-${esc(key)}">
+    ${dailyBlock}
+    ${tasks.length
+      ? `<ul class="tasks${sortable ? ' sortable' : ''}" data-list="${key}">${tasks.map((t) => taskRow(t, { drag: sortable })).join('')}</ul>`
+      : daily.length ? '' : `<p class="empty">${esc(emptyText)}</p>`}
+    </div>
+  </section>`;
+  }
   return `
   <section class="section${secondary ? ' secondary' : ''}">
     <h2>${esc(title)} <span class="count">${tasks.length || ''}</span></h2>
@@ -980,9 +1024,9 @@ function todayHtml() {
     const primary = key === state.sched.mode;
     const list = v[key];
     const label = contextLabel(key);
-    if (key === 'app') { parts.push(section('app', 'App', list, { secondary: true })); continue; } // shown once it has tasks
+    if (key === 'app') { parts.push(section('app', 'App', list, { secondary: true, collapsible: true })); continue; } // shown once it has tasks
     const daily = key === 'work' ? v.dailyWork : v.dailyHome;
-    const opts = { daily, dailyDone: v.dailyDone(daily) };
+    const opts = { daily, dailyDone: v.dailyDone(daily), collapsible: true };
     if (primary) parts.push(section(key, label, list, { ...opts, emptyText: key === 'work' ? 'No work tasks left today.' : 'Nothing on the home list.' }));
     // "for the next work day" only once today's work is over (or on a day off), not before work starts.
     else parts.push(section(key, key === 'work' && (state.sched.workDayOver || !state.sched.isWorkday) ? 'Work, for the next work day' : label, list, { ...opts, secondary: true }));
@@ -1621,6 +1665,13 @@ function wireView() {
         focusAfterRender = 'select[data-time-task]'; render({ force: true }); break;
       case 'time-add-save': saveTimeAdd(); break;
       case 'toggle-subs': setFolded(id, !folded.has(id)); render(); break;
+      case 'toggle-section': {
+        const key = btn.dataset.section;
+        setSectionCollapsed(key, !sectionState.collapsed.has(key));
+        focusAfterRender = `[data-act="toggle-section"][data-section="${key}"]`;
+        render();
+        break;
+      }
       case 'sub-del': {
         const subId = btn.closest('[data-sub]').dataset.sub;
         guarded(async () => { await stopSubTimerIfFor(id, subId); await changeSubtasks(id, (l) => removeSubtask(l, subId)); });

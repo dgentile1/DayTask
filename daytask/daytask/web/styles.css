@@ -131,6 +131,15 @@ textarea { resize: vertical; }
 }
 .section h2 .count { color: var(--muted); font-weight: 400; font-size: .9rem; }
 .section.secondary h2 { color: var(--muted); }
+.section-toggle {
+  display: inline-flex; align-items: baseline; gap: 8px; margin: 0 0 0 -4px; padding: 2px 4px;
+  border: 0; background: none; color: inherit; font: inherit; text-align: left; border-radius: var(--radius); cursor: pointer;
+}
+.section-toggle:hover { background: var(--line); }
+.section-toggle .chev { display: inline-block; width: 1em; transition: transform .15s; }
+.section-toggle[aria-expanded="false"] .chev { transform: rotate(-90deg); }
+.section.collapsed { margin-bottom: 0; }
+@media (prefers-reduced-motion: reduce) { .section-toggle .chev { transition: none; } }
 .empty { margin: 0 14px; color: var(--muted); font-size: .95rem; }
 .hint { color: var(--muted); font-size: .9rem; margin: 4px 14px 10px; }
 
